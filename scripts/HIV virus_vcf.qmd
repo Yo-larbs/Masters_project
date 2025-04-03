@@ -1,0 +1,325 @@
+---
+title: "HIV virus_vcf"
+format: html
+editor: visual
+---
+
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+
+#BiocManager::install('TxDb.Hsapiens.UCSC.hg38.knownGene')
+#BiocManager::install('org.Hs.eg.db')
+#BiocManager::install('BSgenome.Hsapiens.UCSC.hg38')
+#BiocManager::install("VariantAnnotation")
+#BiocManager::install("GenomicRanges")
+#BiocManager::install('TxDb.Hsapiens.UCSC.hg38.refGene')
+library(utils)
+library(GenomicRanges)
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.refGene)
+library(VariantAnnotation)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+setwd('~/Documents/Masters_project/')
+Susceptible_virus_cells_List =list.files(path = "~/Documents/Masters_project/inputs/VCF/Virus/Susceptible",full.names = T)
+Resistant_virus_cells_list=list.files(path = "~/Documents/Masters_project/inputs/VCF/Virus/Resistant",full.names = T)
+```
+
+```{r}
+join_VCF = function(x){
+  list= lapply(x, function(file) {
+    vc_obj=readVcf(file,"hg38")
+    gr=rowRanges(vc_obj)
+    cell_line <- substr(basename(file), 1, 6)
+    mcols(gr)$CellLine=cell_line
+    return(gr)
+    })
+  joint=do.call(c,list)
+  return((joint))
+}
+```
+
+```{r}
+Susceptible_virus_cells_VCF=join_VCF(Susceptible_virus_cells_List)
+Resistant_virus_cells_VCF=join_VCF(Resistant_virus_cells_list)
+```
+
+```{r}
+expandGR <- function(gr) {
+  # Check that the ALT column exists
+  if (!"ALT" %in% names(mcols(gr))) {
+    stop("No ALT column found in the GRanges object.")
+  }
+  
+  # Get the number of ALT alleles for each variant
+  alt_counts <- elementNROWS(gr$ALT)
+  
+  # Optionally, filter out variants with no ALT alleles
+  gr <- gr[alt_counts > 0]
+  alt_counts <- elementNROWS(gr$ALT)
+  
+  # Expand the GRanges object: each row is repeated as many times as ALT alleles
+  gr_expanded <- gr[rep(seq_along(gr), alt_counts)]
+  
+  # Replace the ALT column with the unlisted ALT values
+  gr_expanded$ALT <- unlist(gr$ALT)
+  
+  # Check that the lengths match
+  if (length(gr_expanded) != sum(alt_counts)) {
+    warning("Length mismatch: Expanded GRanges does not equal the total number of ALT alleles.")
+  }
+  
+  return(gr_expanded)
+}
+```
+
+```{r}
+
+Susceptible_virus_cells_VCF_expanded=expandGR(Susceptible_virus_cells_VCF)
+
+Resistant_virus_cells_VCF_expanded=expandGR(Resistant_virus_cells_VCF)
+```
+
+```{r}
+common_virus_variants=GenomicRanges::match((Susceptible_virus_cells_VCF_expanded),(Resistant_virus_cells_VCF_expanded))
+
+common_virus_variants2=GenomicRanges::match((Resistant_virus_cells_VCF_expanded),(Susceptible_virus_cells_VCF_expanded))
+
+
+Susceptible_virus_cells_VCF_nonoverlaps <- Susceptible_virus_cells_VCF_expanded[is.na(common_virus_variants)]
+
+Resistant_virus_cells_VCF_nonoverlaps=Resistant_virus_cells_VCF_expanded[is.na(common_virus_variants2)]
+```
+
+```{r}
+txdb=TxDb.Hsapiens.UCSC.hg38.refGene
+
+intersecting_chrom=GenomicRanges::intersect(seqlevels(Susceptible_virus_cells_VCF_nonoverlaps),seqlevels(BSgenome.Hsapiens.UCSC.hg38))
+
+
+# Update x to keep only those common seqlevels
+Susceptible_virus_cells_VCF_nonoverlaps_2 <- keepSeqlevels(Susceptible_virus_cells_VCF_nonoverlaps, intersecting_chrom,pruning.mode = "coarse")
+```
+
+```{r}
+intersecting_chrom=intersect(seqlevels(Resistant_virus_cells_VCF_nonoverlaps),seqlevels(BSgenome.Hsapiens.UCSC.hg38))
+
+
+# Update x to keep only those common seqlevels
+Resistant_virus_cells_VCF_nonoverlaps_2 <- keepSeqlevels(Resistant_virus_cells_VCF_nonoverlaps, intersecting_chrom,pruning.mode = "coarse")
+```
+
+```{r}
+# Extract all ALT alleles correctly
+var_alleles <- Resistant_virus_cells_VCF_nonoverlaps_2$ALT
+Resistant_virus_protein_VCF=predictCoding(query=trim(Resistant_virus_cells_VCF_nonoverlaps_2),subject = txdb,seqSource=BSgenome.Hsapiens.UCSC.hg38,varAllele = var_alleles)
+```
+
+```{r}
+var_alleles <- Susceptible_virus_cells_VCF_nonoverlaps_2$ALT
+Susceptible_virus_protein_VCF=predictCoding(query = Susceptible_virus_cells_VCF_nonoverlaps_2,subject = txdb,seqSource=BSgenome.Hsapiens.UCSC.hg38,varAllele = var_alleles)
+```
+
+```{r}
+Susceptible_virus_protein_VCF=Susceptible_virus_protein_VCF[!Susceptible_virus_protein_VCF$ALT=='']
+
+Resistant_virus_protein_VCF=Resistant_virus_protein_VCF[!Resistant_virus_protein_VCF$ALT=='']
+
+```
+
+```{r}
+convertToAvinput <- function(gr, output_file) {
+  df <- data.frame(
+    chr = (seqnames(gr)),
+    start = start(gr),
+    end = end(gr),
+    ref = (mcols(gr)$REF),
+    alt = (mcols(gr)$ALT),
+    cell_line=(gr)$CellLine
+  )
+  #df=df[,c(1:4,7),]
+  write.table(df, file = output_file, sep = "\t", quote = FALSE,
+              row.names = FALSE, col.names = FALSE)
+  return(df)
+}
+
+output_file <- "~/Documents/Masters_project/Susceptibles_virus_non_filtered.avinput"
+convertToAvinput(Susceptible_virus_protein_VCF, output_file)
+
+output_file2 <- "~/Documents/Masters_project/Resistant_virus_non_filtered.avinput"
+convertToAvinput(Resistant_virus_protein_VCF, output_file2)
+```
+
+```{bash}
+perl ~/Downloads/annovar/table_annovar.pl --buildver hg38 --out /Users/yoofilarbi/Documents/Masters_project/output/annovar_output/Res_virus_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  /Users/yoofilarbi/Documents/Masters_project/Resistant_virus_non_filtered.avinput /Users/yoofilarbi/Downloads/annovar/humandb
+
+```
+
+```{bash}
+perl ~/Downloads/annovar/table_annovar.pl --buildver hg38 --out /Users/yoofilarbi/Documents/Masters_project/output/annovar_output/Sus_virus_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  /Users/yoofilarbi/Documents/Masters_project/Susceptibles_virus_non_filtered.avinput /Users/yoofilarbi/Downloads/annovar/humandb
+
+```
+
+```{r}
+setwd('../output/annovar_output')
+Resistant_virus_cells_annovar_csv=read.csv("Res_virus_annovar_output.hg38_multianno.csv")
+Susceptible_virus_cells_annovar_csv=read.csv("Sus_virus_annovar_output.hg38_multianno.csv")
+```
+
+```{r}
+Resistant_virus_cells_annovar_csv=Resistant_virus_cells_annovar_csv[(Resistant_virus_cells_annovar_csv$Func.refGene=="exonic"|Resistant_virus_cells_annovar_csv$Func.refGene=="exonic;splicing"),]
+
+Resistant_virus_cells_annovar_csv=Resistant_virus_cells_annovar_csv[!(Resistant_virus_cells_annovar_csv$ExonicFunc.refGene=="synonymous SNV"|Resistant_virus_cells_annovar_csv$ExonicFunc.refGene=="unknown"|Resistant_virus_cells_annovar_csv$Chr=="chrUn_GL000195v1"),]
+```
+
+```{r}
+Susceptible_virus_cells_annovar_csv=Susceptible_virus_cells_annovar_csv[(Susceptible_virus_cells_annovar_csv$Func.refGene=="exonic"|Susceptible_virus_cells_annovar_csv$Func.refGene=="exonic;splicing"),]
+
+Susceptible_virus_cells_annovar_csv=Susceptible_virus_cells_annovar_csv[!(Susceptible_virus_cells_annovar_csv$ExonicFunc.refGene=="synonymous SNV"|Susceptible_virus_cells_annovar_csv$ExonicFunc.refGene=="unknown"|Susceptible_virus_cells_annovar_csv$Chr=="chrUn_GL000195v1"),]
+```
+
+```{r}
+library(ggplot2)
+
+df <- unique(Resistant_virus_cells_annovar_csv)
+df2 = unique(Susceptible_virus_cells_annovar_csv)
+
+# Group by chromosome, count the number of variants, and normalize by dividing by 16
+df_summary <- df %>%
+  group_by(Chr) %>%
+  summarise(Count = n(),Phenotype="Resistant_virus") %>%
+  mutate(Normalized = Count / 27)
+
+df2_summary <- df2 %>%
+  group_by(Chr) %>%
+  summarise(Count = n(),Phenotype="Susceptible_virus") %>%
+  mutate(Normalized = Count / 18)
+
+df_summary=rbind(df_summary,df2_summary)
+df_summary$Chr <- gsub("chr", "", df_summary$Chr, ignore.case = TRUE)
+#df_summary$Chr <- gsub("^Un_.*|^GL.*|^KI.*", "Unplaced", df_summary$Chr)
+#df_summary$Chr = as.factor()
+
+
+```
+
+```{r}
+ggplot(data = df_summary,aes(x=Chr,y=Normalized))+
+  geom_bar(stat = "identity",position = "dodge",aes(fill=Phenotype))+
+  theme_minimal()+
+  labs(title = "Normalized Variant Count by Chromosome",
+       x = "Chromosome",
+       y = "Normalized Count (per cell line)")+
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+```{r}
+ggplot(data = (unique(Resistant_virus_cells_annovar_csv)%>%group_by(Gene.refGene)%>%summarise(Count=n())%>%slice_max(Count,n=20)),aes(x=Gene.refGene,y = Count))+
+  geom_bar(stat = "identity",fill = "lightblue",color="black")+
+  theme_classic()+
+  xlab("Most mutated genes")
+```
+
+```{r}
+ggplot(data = (unique(Susceptible_virus_cells_annovar_csv)%>%group_by(Gene.refGene)%>%summarise(Count=n())%>%slice_max(Count,n=20)),aes(x=Gene.refGene,y = Count))+
+  geom_bar(stat = "identity",fill = "lightblue",color="black")+
+  theme_classic()+
+  xlab("Most mutated genes")
+```
+
+```{r}
+library(dplyr)
+Resistant_virus_cells_annovar_csv_deleterious=unique(Resistant_virus_cells_annovar_csv[Resistant_virus_cells_annovar_csv$SIFT_pred=="D"|Resistant_virus_cells_annovar_csv$PROVEAN_pred=="D",])
+
+unique_genes_per_cell=Resistant_virus_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
+common_mutations_Resistant_virus=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+```
+
+```{r}
+Susceptible_virus_cells_annovar_csv_deleterious=unique(Susceptible_virus_cells_annovar_csv[Susceptible_virus_cells_annovar_csv$SIFT_pred=="D"|Susceptible_virus_cells_annovar_csv$PROVEAN_pred=="D",])
+
+unique_genes_per_cell=Susceptible_virus_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
+common_mutations_Susceptible_virus=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+```
+
+```{r}
+ggplot(data = common_mutations_Susceptible_virus%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.05)+
+  geom_point(size=3,colour = "grey")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(data = common_mutations_Resistant_virus%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.05)+
+  geom_point(size=3,colour = "grey")+
+  theme_minimal()
+```
+
+```{r}
+common_mutations_Susceptible_virus[common_mutations_Susceptible_virus$Gene.refGene %in%(setdiff(common_mutations_Susceptible_virus$Gene.refGene,common_mutations_Resistant_virus$Gene.refGene)),]
+```
+
+```{r}
+ggplot(data = common_mutations_Susceptible_virus[common_mutations_Susceptible_virus$Gene.refGene %in%(setdiff(common_mutations_Susceptible_virus$Gene.refGene,common_mutations_Resistant_virus$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.5)+
+  theme_minimal()
+```
+
+```{r}
+common_mutations_Resistant_virus[common_mutations_Resistant_virus$Gene.refGene %in%(setdiff(common_mutations_Resistant_virus$Gene.refGene,common_mutations_Susceptible_virus$Gene.refGene)),]
+```
+
+```{r}
+ggplot(data = common_mutations_Resistant_virus[common_mutations_Resistant_virus$Gene.refGene %in%(setdiff(common_mutations_Resistant_virus$Gene.refGene,common_mutations_Susceptible_virus$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.5)+
+  theme_minimal()
+
+```
+
+```{r}
+common_mutations_Resistant_virus$phenotype='Resistant'
+common_mutations_Resistant_virus$rate=common_mutations_Resistant_virus$common/length(Resistant_virus_cells_list)
+common_mutations_Susceptible_virus$phenotype='Susceptible'
+common_mutations_Susceptible_virus$rate=common_mutations_Susceptible_virus$common/length(Susceptible_virus_cells_List)
+```
+
+```{r}
+common_genes=intersect(common_mutations_Susceptible_virus$Gene.refGene,common_mutations_Resistant_virus$Gene.refGene)
+```
+
+```{r}
+common_mutations_Resistant_virus[common_mutations_Resistant_virus$Gene.refGene%in%common_genes,]
+```
+
+```{r}
+common_rates=rbind(t(common_mutations_Resistant_virus[common_mutations_Resistant_virus$Gene.refGene%in%common_genes,]),t(common_mutations_Susceptible_virus[common_mutations_Susceptible_virus$Gene.refGene%in%common_genes,]))
+```
+
+```{r}
+common_rates=as.data.frame(t(common_rates))
+```
+
+```{r}
+common_rates=merge.data.frame(x=common_mutations_Resistant_virus[common_mutations_Resistant_virus$Gene.refGene%in%common_genes,],y=common_mutations_Susceptible_virus[common_mutations_Susceptible_virus$Gene.refGene%in%common_genes,],by.x = 'Gene.refGene',by.y = 'Gene.refGene')
+```
+
+```{r}
+common_rates$Proportional_difference=common_rates$rate.x-common_rates$rate.y
+
+common_rates=common_rates%>%dplyr::rename(.,common_resistant=common.x)%>%
+  dplyr::rename(.,common_susceptible=common.y)
+
+common_rates=common_rates[,c(1,2,5,8)]
+
+```
+
+```{r}
+Resistant_virus_cells_annovar_csv_deleterious[Resistant_virus_cells_annovar_csv_deleterious$Gene.refGene=='HLA-A',c(4,5,7,10,121)]
+```

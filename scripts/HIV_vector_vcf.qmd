@@ -1,0 +1,471 @@
+---
+title: "VCF_call"
+format: html
+editor: visual
+---
+
+## loading
+
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+
+#BiocManager::install('TxDb.Hsapiens.UCSC.hg38.knownGene')
+#BiocManager::install('org.Hs.eg.db')
+#BiocManager::install('BSgenome.Hsapiens.UCSC.hg38')
+#BiocManager::install("VariantAnnotation")
+#BiocManager::install("GenomicRanges")
+#BiocManager::install('TxDb.Hsapiens.UCSC.hg38.refGene')
+library(utils)
+library(GenomicRanges)
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.refGene)
+library(VariantAnnotation)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+setwd('~/Documents/Masters_project/')
+Susceptible_cells_List =list.files(path = "~/Documents/Masters_project/inputs/VCF/Vector/Susceptible",full.names = T)
+Resistant_cells_list=list.files(path = "~/Documents/Masters_project/inputs/VCF/Vector/Resistant",full.names = T)
+```
+
+```{r}
+join_VCF = function(x){
+  list= lapply(x, function(file) {
+    vc_obj=readVcf(file,"hg38")
+    gr=rowRanges(vc_obj)
+    cell_line <- substr(basename(file), 1, 6)
+    mcols(gr)$CellLine=cell_line
+    return(gr)
+    })
+  joint=do.call(c,list)
+  return((joint))
+}
+```
+
+```{r}
+Susceptible_cells_VCF=join_VCF(Susceptible_cells_List)
+Resistant_cells_VCF=join_VCF(Resistant_cells_list)
+```
+
+```{r}
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(org.Hs.eg.db)
+library(BSgenome.Hsapiens.UCSC.hg38)
+```
+
+```{r}
+expandGR <- function(gr) {
+  # Check that the ALT column exists
+  if (!"ALT" %in% names(mcols(gr))) {
+    stop("No ALT column found in the GRanges object.")
+  }
+  
+  # Get the number of ALT alleles for each variant
+  alt_counts <- elementNROWS(gr$ALT)
+  
+  # Optionally, filter out variants with no ALT alleles
+  gr <- gr[alt_counts > 0]
+  alt_counts <- elementNROWS(gr$ALT)
+  
+  # Expand the GRanges object: each row is repeated as many times as ALT alleles
+  gr_expanded <- gr[rep(seq_along(gr), alt_counts)]
+  
+  # Replace the ALT column with the unlisted ALT values
+  gr_expanded$ALT <- unlist(gr$ALT)
+  
+  # Check that the lengths match
+  if (length(gr_expanded) != sum(alt_counts)) {
+    warning("Length mismatch: Expanded GRanges does not equal the total number of ALT alleles.")
+  }
+  
+  return(gr_expanded)
+}
+```
+
+```{r}
+head(Susceptible_cells_VCF,30)
+head(Resistant_cells_VCF)
+
+Susceptible_cells_VCF_expanded=expandGR(Susceptible_cells_VCF)
+Resistant_cells_VCF_expanded=expandGR(Resistant_cells_VCF)
+```
+
+```{r}
+common_variants=GenomicRanges::match((Susceptible_cells_VCF_expanded),(Resistant_cells_VCF_expanded))
+common_variants2=GenomicRanges::match((Resistant_cells_VCF_expanded),(Susceptible_cells_VCF_expanded))
+Susceptible_cells_VCF_nonoverlaps <- Susceptible_cells_VCF_expanded[is.na(common_variants)]
+Resistant_cells_VCF_nonoverlaps=Resistant_cells_VCF_expanded[is.na(common_variants2)]
+```
+
+```{r}
+Resistant_cells_VCF[Resistant_cells_VCF$ALT=='A']
+
+```
+
+```{r}
+Susceptible_cells_VCF_nonoverlaps
+```
+
+```{r}
+Resistant_cells_VCF_nonoverlaps
+```
+
+```{r}
+txdb=TxDb.Hsapiens.UCSC.hg38.refGene
+
+intersecting_chrom=GenomicRanges::intersect(seqlevels(Susceptible_cells_VCF_nonoverlaps),seqlevels(BSgenome.Hsapiens.UCSC.hg38))
+
+
+# Update x to keep only those common seqlevels
+Susceptible_cells_VCF_nonoverlaps_2 <- keepSeqlevels(Susceptible_cells_VCF_nonoverlaps, intersecting_chrom,pruning.mode = "coarse")
+
+#Susceptible_cells_VCF_nonoverlaps_2=keepStandardChromosomes(Susceptible_cells_VCF_nonoverlaps,pruning.mode = 'tidy')
+
+
+#Susceptible_coding_variants=unique(locateVariants(trim(Susceptible_cells_VCF_nonoverlaps_2),txdb,region = CodingVariants()))
+```
+
+```{r}
+ref_lengths <- seqlengths(Susceptible_cells_VCF_nonoverlaps_2)
+
+# Identify out-of-bound ranges
+out_of_bound <- sapply(seq_along(Susceptible_cells_VCF_nonoverlaps_2), function(i) {
+  chr <- as.character(seqnames(Susceptible_cells_VCF_nonoverlaps_2)[i])
+  start_val <- start(Susceptible_cells_VCF_nonoverlaps_2)[i]
+  end_val <- end(Susceptible_cells_VCF_nonoverlaps_2)[i]
+  # Check if start or end is greater than the defined chromosome length
+  if (!is.na(ref_lengths[chr]) && (start_val > ref_lengths[chr] || end_val > ref_lengths[chr])) {
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+})
+
+# Get a summary of how many are out-of-bound
+sum(out_of_bound)
+```
+
+```{r}
+intersecting_chrom=intersect(seqlevels(Resistant_cells_VCF_nonoverlaps),seqlevels(BSgenome.Hsapiens.UCSC.hg38))
+
+
+# Update x to keep only those common seqlevels
+Resistant_cells_VCF_nonoverlaps_2 <- keepSeqlevels(Resistant_cells_VCF_nonoverlaps, intersecting_chrom,pruning.mode = "coarse")
+
+#Resistant_cells_VCF_nonoverlaps_2=keepStandardChromosomes(Resistant_cells_VCF_nonoverlaps,pruning.mode = 'coarse')
+
+
+
+#Resistant_coding_variants=locateVariants(Resistant_cells_VCF_nonoverlaps_2,txdb,region = CodingVariants())
+```
+
+```{r}
+Hsapiens=(BSgenome.Hsapiens.UCSC.hg38)
+
+```
+
+```{r}
+
+expanded_VCF=expandGR(Resistant_cells_VCF_nonoverlaps_2)
+
+# Extract all ALT alleles correctly
+var_alleles <- Resistant_cells_VCF_nonoverlaps_2$ALT
+Resistant_protein_VCF=predictCoding(query=trim(Resistant_cells_VCF_nonoverlaps_2),subject = txdb,seqSource=BSgenome.Hsapiens.UCSC.hg38,varAllele = var_alleles)
+```
+
+```{r}
+#expanded_VCF=expandGR(Susceptible_cells_VCF_nonoverlaps_2)
+# Extract all ALT alleles correctly
+var_alleles <- Susceptible_cells_VCF_nonoverlaps_2$ALT
+Susceptible_protein_VCF=predictCoding(query = Susceptible_cells_VCF_nonoverlaps_2,subject = txdb,seqSource=BSgenome.Hsapiens.UCSC.hg38,varAllele = var_alleles)
+```
+
+```{r}
+Susceptible_protein_VCF=Susceptible_protein_VCF[!Susceptible_protein_VCF$ALT=='']
+```
+
+```{r}
+unique_Resistant_protein_mutations
+```
+
+```{r}
+unique_Susceptible_protein_mutations=unique(Susceptible_protein_VCF[!(Susceptible_protein_VCF$CONSEQUENCE=="synonymous"|Susceptible_protein_VCF$CONSEQUENCE=="not translated")])
+```
+
+```{r}
+Susceptible_protein_for_annovar=unique_Susceptible_protein_mutations[!(unique_Susceptible_protein_mutations$GENEID %in% unique_Resistant_protein_mutations$GENEID)]
+```
+
+```{r}
+Susceptible_protein_VCF=Susceptible_protein_VCF[!Susceptible_protein_VCF$ALT=='']
+```
+
+```{r}
+install.packages('annovarR')
+library(annovarR)
+
+```
+
+```{r}
+convertToAvinput <- function(gr, output_file) {
+  df <- data.frame(
+    chr = (seqnames(gr)),
+    start = start(gr),
+    end = end(gr),
+    ref = (mcols(gr)$REF),
+    alt = (mcols(gr)$ALT),
+    cell_line=(gr)$CellLine
+  )
+  #df=df[,c(1:4,7),]
+  write.table(df, file = output_file, sep = "\t", quote = FALSE,
+              row.names = FALSE, col.names = FALSE)
+  return(df)
+}
+
+output_file <- "~/Documents/Masters_project/Susceptibles_non_filtered.avinput"
+convertToAvinput(Susceptible_protein_VCF, output_file)
+
+output_file2 <- "~/Documents/Masters_project/Resistant_non_filtered.avinput"
+convertToAvinput(Resistant_protein_VCF, output_file2)
+
+```
+
+```{r}
+annovar_dir <- "/Users/yoofilarbi/Downloads/annovar"  # Adjust this to your ANNOVAR installation path
+database_dir <- file.path(annovar_dir, "humandb")
+buildver <- "hg38"
+output_prefix <- "annovar_output"
+system2(
+  command = file.path(annovar_dir, "table_annovar.pl"),
+  args = c(
+    "--buildver", buildver,
+    "--out", output_prefix,
+    "--remove",
+    "--protocol", "refGene,gnomad41_exome,clinvar_20140902",'esp6500siv2_ea',
+    "--operation", "g,f,f,f", 
+    "--nastring", ".",
+    "--csvout",
+    "/Users/yoofilarbi/Documents/Masters_project/Susceptible_protein.avinput",        
+    database_dir
+  )
+)
+```
+
+```{bash}
+
+perl ~/Downloads/annovar/table_annovar.pl --buildver hg38 --out /Res_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  /Users/yoofilarbi/Documents/Masters_project/Resistant_non_filtered.avinput /Users/yoofilarbi/Downloads/annovar/humandb
+
+```
+
+```{bash}
+perl ~/Downloads/annovar/table_annovar.pl --buildver hg38 --out Sus_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  /Users/yoofilarbi/Documents/Masters_project/Susceptibles_non_filtered.avinput /Users/yoofilarbi/Downloads/annovar/humandb
+```
+
+```{r}
+setwd('..')
+Resistant_cells_annovar_csv=read.csv("Res_annovar_output.hg38_multianno.csv")
+Susceptible_cells_annovar_csv=read.csv("Sus_annovar_output.hg38_multianno.csv")
+```
+
+```{r}
+Resistant_cells_annovar_csv=Resistant_cells_annovar_csv[(Resistant_cells_annovar_csv$Func.refGene=="exonic"|Resistant_cells_annovar_csv$Func.refGene=="exonic;splicing"),]
+
+Resistant_cells_annovar_csv=Resistant_cells_annovar_csv[!(Resistant_cells_annovar_csv$ExonicFunc.refGene=="synonymous SNV"|Resistant_cells_annovar_csv$ExonicFunc.refGene=="unknown"|Resistant_cells_annovar_csv$Chr=="chrUn_GL000195v1"),]
+```
+
+```{r}
+Susceptible_cells_annovar_csv=Susceptible_cells_annovar_csv[(Susceptible_cells_annovar_csv$Func.refGene=="exonic"|Susceptible_cells_annovar_csv$Func.refGene=="exonic;splicing"),]
+
+Susceptible_cells_annovar_csv=Susceptible_cells_annovar_csv[!(Susceptible_cells_annovar_csv$ExonicFunc.refGene=="synonymous SNV"|Susceptible_cells_annovar_csv$ExonicFunc.refGene=="unknown"|Susceptible_cells_annovar_csv$Chr=="chrUn_GL000195v1"),]
+```
+
+```{r}
+Resistant_cells_annovar_csv$gnomad41_exome_AF=as.numeric(Resistant_cells_annovar_csv$gnomad41_exome_AF)
+Susceptible_cells_annovar_csv$gnomad41_exome_AF=as.numeric(Susceptible_cells_annovar_csv$gnomad41_exome_AF)
+```
+
+```{r}
+intersecting_genes=intersect(Resistant_cells_annovar_csv$Gene.knownGene,Susceptible_cells_annovar_csv$Gene.knownGene)
+```
+
+```{r}
+#Resistant_cells_annovar_csv=Resistant_cells_annovar_csv[!(Resistant_cells_annovar_csv$Gene.knownGene %in% intersecting_genes),]
+```
+
+```{r}
+#Susceptible_cells_annovar_csv=Susceptible_cells_annovar_csv[!(Susceptible_cells_annovar_csv$Gene.knownGene %in% intersecting_genes),]
+```
+
+```{r}
+Resistant_cells_annovar_csv=na.omit(Resistant_cells_annovar_csv[!(Resistant_cells_annovar_csv$gnomad41_exome_AF>0.001),])
+Susceptible_cells_annovar_csv=na.omit(Susceptible_cells_annovar_csv[!(Susceptible_cells_annovar_csv$gnomad41_exome_AF>0.001),])
+
+```
+
+```{r}
+library(ggplot2)
+
+df <- unique(Resistant_cells_annovar_csv)
+df2 = unique(Susceptible_cells_annovar_csv)
+
+# Group by chromosome, count the number of variants, and normalize by dividing by 16
+df_summary <- df %>%
+  group_by(Chr) %>%
+  summarise(Count = n(),Phenotype="resistant") %>%
+  mutate(Normalized = Count / 22)
+
+df2_summary <- df2 %>%
+  group_by(Chr) %>%
+  summarise(Count = n(),Phenotype="susceptible") %>%
+  mutate(Normalized = Count / 22)
+
+df_summary=rbind(df_summary,df2_summary)
+df_summary$Chr <- gsub("chr", "", df_summary$Chr, ignore.case = TRUE)
+#df_summary$Chr <- gsub("^Un_.*|^GL.*|^KI.*", "Unplaced", df_summary$Chr)
+#df_summary$Chr = as.factor()
+
+
+```
+
+```{r}
+ggplot(data = df_summary,aes(x=Chr,y=Normalized))+
+  geom_bar(stat = "identity",position = "dodge",aes(fill=Phenotype))+
+  theme_minimal()+
+  labs(title = "Normalized Variant Count by Chromosome",
+       x = "Chromosome",
+       y = "Normalized Count (per cell line)")+
+  theme(axis.text.x = element_text(angle = 45))
+  
+```
+
+```{r}
+ggplot(data = (unique(Resistant_cells_annovar_csv)%>%group_by(Gene.refGene)%>%summarise(Count=n())%>%slice_max(Count,n=20)),aes(x=Gene.refGene,y = Count))+
+  geom_bar(stat = "identity",fill = "lightblue",color="black")+
+  theme_classic()+
+  xlab("Most mutated genes")
+```
+
+```{r}
+ggplot(data = (unique(Susceptible_cells_annovar_csv)%>%group_by(Gene.refGene)%>%summarise(Count=n())%>%slice_max(Count,n=20)),aes(x=Gene.refGene,y = Count))+
+  geom_bar(stat = "identity",fill = "lightblue",color="black")+
+  theme_classic()+
+  xlab("Most mutated genes")
+```
+
+```{r}
+unique(Resistant_cells_annovar_csv$Gene.knownGene)
+```
+
+```{r}
+unique(Susceptible_cells_annovar_csv$Gene.knownGene)
+
+```
+
+```{r}
+library(dplyr)
+Resistant_cells_annovar_csv_deleterious=unique(Resistant_cells_annovar_csv[Resistant_cells_annovar_csv$SIFT_pred=="D"|Resistant_cells_annovar_csv$PROVEAN_pred=="D",])
+
+unique_genes_per_cell=Resistant_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
+common_mutations_resistant=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+```
+
+```{r}
+Susceptible_cells_annovar_csv_deleterious=unique(Susceptible_cells_annovar_csv[Susceptible_cells_annovar_csv$SIFT_pred=="D"|Susceptible_cells_annovar_csv$PROVEAN_pred=="D",])
+
+unique_genes_per_cell=Susceptible_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
+common_mutations_susceptible=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+```
+
+```{r}
+ggplot(data = common_mutations_susceptible%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.05)+
+  geom_point(size=3,colour = "grey")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(data = common_mutations_resistant%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.05)+
+  geom_point(size=3,colour = "grey")+
+  theme_minimal()
+```
+
+```{r}
+common_mutations_susceptible[common_mutations_susceptible$Gene.refGene %in%(setdiff(common_mutations_susceptible$Gene.refGene,common_mutations_resistant$Gene.refGene)),]
+```
+
+```{r}
+ggplot(data = common_mutations_susceptible[common_mutations_susceptible$Gene.refGene %in%(setdiff(common_mutations_susceptible$Gene.refGene,common_mutations_resistant$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.5)+
+  theme_minimal()
+```
+
+```{r}
+common_mutations_resistant[common_mutations_resistant$Gene.refGene %in%(setdiff(common_mutations_resistant$Gene.refGene,common_mutations_susceptible$Gene.refGene)),]
+```
+
+```{r}
+ggplot(data = common_mutations_resistant[common_mutations_resistant$Gene.refGene %in%(setdiff(common_mutations_resistant$Gene.refGene,common_mutations_susceptible$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+  geom_bar(stat="identity",width= 0.5)+
+  theme_minimal()
+
+```
+
+```{r}
+heatmap_df_susceptible=unique(Susceptible_cells_annovar_csv_deleterious)%>%group_by(Otherinfo1,Gene.refGene)%>%summarise(MutationCount=n(),Phenotype="Susceptible",.groups = "drop")
+
+heatmap_df_resistant=unique(Resistant_cells_annovar_csv_deleterious)%>%group_by(Otherinfo1,Gene.refGene)%>%summarise(MutationCount=n(),Phenotype="Resistant",.groups = "drop")
+```
+
+```{r}
+heatmap_df=rbind(heatmap_df_susceptible,heatmap_df_resistant)
+```
+
+```{r}
+heatmap_df$Phenotype=factor(heatmap_df$Phenotype,levels = c("Susceptible","Resistant"))
+heatmap_df=heatmap_df%>%arrange(Phenotype,Otherinfo1)
+cellline_order <- heatmap_df$Otherinfo1
+heatmap_df$Otherinfo1=factor(heatmap_df$Otherinfo1,levels = unique(cellline_order))
+```
+
+```{r}
+heatmap_df$mutation_status=ifelse(heatmap_df$MutationCount>0,1,0)
+```
+
+```{r}
+ggplot(data = heatmap_df,aes(x=Gene.refGene,y=Otherinfo1,fill=MutationCount))+
+  geom_tile()+
+  scale_fill_gradient(low = "red", high = "red4")+
+  theme(axis.text.x = element_blank())
+```
+
+```{r}
+library(tidyr)
+heatmap_df_2=heatmap_df%>%distinct(Otherinfo1,Gene.refGene)%>%mutate(Mutation=1)%>%pivot_wider(names_from = Otherinfo1, values_from = Mutation, values_fill = list(Mutation = 0))
+
+binary_long <- pivot_longer(heatmap_df_2, 
+                            cols = -Gene.refGene, 
+                            names_to = "CellLine", 
+                            values_to = "Mutation")
+```
+
+```{r}
+ggplot(data = binary_long,aes(x=Gene.refGene,y=CellLine,fill =(Mutation)))+
+  geom_tile()+
+  scale_fill_gradient(low = "white", high = "red")+
+  theme(axis.text.x = element_blank())
+```
+
+```{r}
+setwd('../')
+Resistant_unique_deleterious=Resistant_cells_annovar_csv_deleterious$Gene.refGene[!Resistant_cells_annovar_csv_deleterious$Gene.refGene%in%Susceptible_cells_annovar_csv_deleterious$Gene.refGene]
+
+sink("list for gene ontology.txt",)
+cat(paste(Resistant_unique_deleterious,collapse = '\n'))
+sink()
+```
