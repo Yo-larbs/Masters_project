@@ -1,9 +1,9 @@
 process REHEADERING {
     tag "${vcf_file.simpleName}"
-    publishDir "${params.outdir}/reheadered", mode: 'copy'
+    publishDir "${params.outdir}/${params.celltype}/reheadered", mode: 'copy'
     container "${ workflow.containerEngine == 'docker' && !task.ext.singularity_pull_docker_container ?
-    'quay.io/biocontainers/bcftools:1.7--0' :
-    'biocontainers/bcftools:1.7--0' }"
+    'quay.io/biocontainers/bcftools:1.9--ha228f0b_4':
+    'bcftools:1.9--ha228f0b_4' }"
 
     input:
         tuple val(fullpath), path(vcf_file)
@@ -13,9 +13,7 @@ process REHEADERING {
     script:
 
     """
-    rel_path=\$(echo "${fullpath}" | sed -E 's|^${params.projectDir}/||')
-    echo "VCF path is: \${rel_path}"
-
+    echo "$fullpath"
     SampleName=\$(basename "${vcf_file}" | sed -E 's/(\\.filtered\\..*\$|_ERR.*\$)//')
     echo "\$SampleName" > "\${SampleName}.txt"
     

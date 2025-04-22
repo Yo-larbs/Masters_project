@@ -1,9 +1,9 @@
 process MERGE {
     tag "${reheaderedVCF.simpleName}"
-    publishDir "${params.outdir}/Merged_genome", mode: 'copy'
+    publishDir "${params.outdir}/${params.celltype}/Merged_genome", mode: 'copy'
     container "${ workflow.containerEngine == 'docker' && !task.ext.singularity_pull_docker_container ?
-    'quay.io/biocontainers/bcftools:1.7--0' :
-    'biocontainers/bcftools:1.7--0' }"
+    'quay.io/biocontainers/bcftools:1.9--ha228f0b_4' :
+    'biocontainers/bcftools:1.9--ha228f0b_4' }"
 
     input:
         path reheaderedVCF

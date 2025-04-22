@@ -1,0 +1,3 @@
+#!/bin/bash
+Docker run --platform linux/amd64 -v ../..:/data quay.io/biocontainers/plink2:2.00a2.3--hf22980b_0 plink2 --vcf "/data/output/Filtered_merged_genome/filtered_merged_genome.vcf.gz" --make-pgen --allow-extra-chr --out "/data/output/Plink_output/vector/vector_VCF"
+Docker run --platform linux/amd64 -v ..:/data quay.io/biocontainers/plink2:2.00a2.3--hf22980b_0 plink2 --pfile  "/data/output/Plink_output/vector/vector_VCF" --pheno "/data/inputs/phenotype.txt" --glm --allow-extra-chr --pheno-name phenotype --out "/data/output/Plink_output/vector/vector_assoc_results"
