@@ -1,0 +1,397 @@
+---
+title: "total_virus_plink_analysis"
+format: html
+editor: visual
+---
+
+# plink analysis
+
+```{r}
+#install.packages('qqman')
+#BiocManager::install("clusterProfiler",)
+#BiocManager::install("org.Hs.eg.db")
+#install.packages("ggplotify")
+#install.packages("pheatmap")
+library(ggplotify)
+library(ggplot2)
+library(qqman)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(readr)
+library(pheatmap)
+
+```
+
+# general overview
+i wanted to compare all the celll lines based on the PC1 from the classification
+so i ran the plink workflow (see plink_vector_analysis.qmd) on all the cell lines together and ran a linear logistic based on the PC1
+
+
+```{r}
+getwd()
+total_Plink_virus=fread('../../output/VCF/Plink_output/virus/Total_cell_line/total_virus_assoc_results.PC1.glm.linear')
+
+total_Plink_virus=total_Plink_virus[!is.na(total_Plink_virus$P),]
+```
+
+
+```{bash}
+docker run --rm -v "$PWD":/data quay.io/biocontainers/bcftools:1.7--0 \
+  bash -lc "bcftools view -h /data/total_merged.vcf.gz > /data/header.txt"
+
+```
+
+
+```{bash}
+docker run --rm --platform linux/amd64 -v "$PWD":/data quay.io/biocontainers/bcftools:1.7--0 \
+  bash -lc "\
+    bcftools reheader \
+      --header /data/header.txt \
+      -o /data/total_merged.fixed.vcf.gz \
+      /data/total_merged.vcf.gz && \
+    bcftools index /data/total_merged.fixed.vcf.gz \
+  "
+```
+
+
+```{bash}
+docker run --rm --platform linux/amd64 -v "$PWD":/data quay.io/biocontainers/bcftools:1.9--ha228f0b_4 bcftools sort /data/inputs/VCF/compressed/filtered_total_merged.vcf.gz -O z -o /data/inputs/VCF/compressed/filtered_total_merged.sorted.vcf.gz
+```
+
+
+```{bash}
+docker run --rm --platform linux/amd64 -v "$PWD":/data quay.io/biocontainers/bcftools:1.7--0 \
+  bcftools norm -f /data/hg38_fasta/hg38.fna /data/filtered_total_merged.sorted.vcf.gz \
+  -Oz -o /data/filtered_total_merged.normalized.vcf.gz
+```
+
+
+# matching variants
+
+
+
+First i convert my VCF to avinput for annovar
+```{bash}
+perl ../../convert2annovar.pl \
+  -format vcf4old \
+  ../../inputs/VCF/compressed/filtered_total_merged.vcf \
+  > ../../inputs/annovar_input/filtered_merged.avinput
+```
+
+then i run annovar 
+
+```{bash}
+$PWD
+perl ../../annovar/table_annovar.pl --buildver hg38 --out ../../output/annovar_output/Total_cell_line_anno --remove --protocol ensGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp47a --operation g,f,f,f,f --nastring "." --otherinfo --csvout  ../../inputs/annovar_input/filtered_merged.avinput ../../annovar/humandb
+```
+
+# trying to align annovar output with data
+
+i extract the data striaght from the VCF to get which cell  lines have which mutations
+
+```{bash}
+
+Docker run --platform linux/amd64 -v $PWD:/data quay.io/biocontainers/bcftools:1.7--0 bcftools query -f '%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n' /data/inputs/VCF/compressed/filtered_total_merged.normalized.vcf.gz  > output/genotypes.tsv
+
+Docker run --platform linux/amd64 -v $PWD:/data quay.io/biocontainers/bcftools:1.7--0 bcftools query -l /data/inputs/VCF/compressed/filtered_total_merged.normalized.vcf.gz > sample_names.txt
+
+( printf '#CHROM\tPOS\tREF\tALT' && \
+  paste -sd '\t' sample_names.txt \
+) > header.tsv
+
+# now cat them together
+cat header.tsv genotypes.tsv > genotypes.withheader.tsv
+rm header.tsv && rm sample_names.txt
+```
+
+##cleaning up plink data to align with annovar
+
+The problem is plink uses left aligned values for indels, e.g if the REF is **C** and the ALT is **CCA** (insertion of CA) in annovar the ref would be "" and the ALT would be **CC**. this means that When merging the two dataframes all frameshifts would be exluded, in this code i  find all deletions and insertions, then for each of those cases i add 1 to the position to match annovar
+
+I then strip off the anchor base for insertions and the first base for deletions so REF =**CGA** and ALT == *C* becomes REF= **CGA** and ALT="" then i replace the original columns with these altered ones
+
+### getting rid of multiallele
+
+i expand the dataframe by splitting the ALT so it gets a new row per allele
+
+```{r}
+total_Plink_virus <- total_Plink_virus %>%
+  # split ALT on commas, making one row per allele
+  separate_rows(ALT, sep = ",") %>%
+  # if you also need to adjust other genotype fields, you can do so here
+  ungroup()
+```
+
+```{r}
+total_Plink_virus = total_Plink_virus %>% mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
+    POS2 = case_when(
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),          # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    ) 
+  ) %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+
+```{r}
+setwd('../../output/annovar_output/')
+
+plink_total_annovar_virus=read.csv('Total_cell_line_anno.hg38_multianno.csv') %>%  dplyr::rename(
+CHROM = Chr,
+POS   = Start,
+REF   = Ref,
+ALT   = Alt ) %>% dplyr::select(CHROM, POS, REF, ALT, everything())
+
+
+```
+
+## keeping cell line specific information
+with just the plink  and annovar i cant keep which cell lines have specific variants. I can only do this by taking out the genotype information straight from the VCF then realign with the annovar and Plink dataframes
+
+```{r}
+setwd('../../output/')
+genos_virus_wide <- read_tsv("genotypes.withheader.tsv", col_names = T)
+colnames(genos_virus_wide) <- c("CHROM","POS","REF","ALT", colnames(genos_virus_wide)[5:ncol(genos_virus_wide)])
+
+```
+## phenotype
+this is the phenotype file that contains the phenotype information
+
+```{r}
+library(dplyr)
+sample_names=colnames(genos_virus_wide[,-c(1,2,3,4)])
+pheno_virus=read_tsv('../../inputs/plink_total_cell_line_virus_phenotype.txt')
+
+```
+
+removing the 
+
+```{r}
+plink_total_annovar_virus=plink_total_annovar_virus[!(plink_total_annovar_virus$ALT=='*'),]
+
+plink_total_annovar_virus=plink_total_annovar_virus[!(plink_total_annovar_virus$ExonicFunc.ensGene=='synonymous SNV'),]
+
+plink_total_annovar_virus=plink_total_annovar_virus[(plink_total_annovar_virus$Func.ensGene=='exonic'|plink_total_annovar_virus$Func.ensGene=='ncRNA_exonic'|plink_total_annovar_virus$Func.ensGene=='exonic;splicing'|plink_total_annovar_virus$Func.ensGene=='splicing'|plink_total_annovar_virus$Func.ensGene=='ncRNA_exonic;splicing'|plink_total_annovar_virus$Func.ensGene=='splicing'),]
+
+
+```
+
+##cleaning up genotype information data to align with annovar
+
+The problem is plink uses left aligned values for indels, e.g if the REF is **C** and the ALT is **CCA** (insertion of CA) in annovar the ref would be "" and the ALT would be **CC**. this means that When merging the two dataframes all frameshifts would be exluded, in this code i  find all deletions and insertions, then for each of those cases i add 1 to the position to match annovar
+
+I then strip off the anchor base for insertions and the first base for deletions so REF =**CGA** and ALT == *C* becomes REF= **CGA** and ALT="" then i replace the original columns with these altered ones
+
+```{r}
+genos_virus2 <- genos_virus_wide %>% 
+  mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
+    POS2 = case_when(
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),          # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    )
+  ) %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+```{r}
+plink_total_annovar_virus=as.data.table(plink_total_annovar_virus)
+
+anno_unique <- plink_total_annovar_virus[
+  , .SD[1],                           # pick the first row in each group
+  by = .(CHROM,POS,REF,ALT)          # grouping columns
+]
+
+genos_virus2=as.data.table(genos_virus2)
+pheno_virus=as.data.table(pheno_virus)
+
+setkeyv(anno_unique, c("CHROM","POS","REF","ALT"))
+setkeyv(genos_virus2, c("CHROM","POS","REF","ALT"))
+setkey(pheno_virus, "IID")
+
+genos_virus_annotated <- anno_unique[genos_virus2]   # fast, keyed join
+
+```
+
+```{r}
+genos_virus_annotated=genos_virus_annotated[!is.na(genos_virus_annotated$End)]
+```
+
+
+```{r}
+
+plink_virus_full_analysis_df= left_join(x = total_Plink_virus ,y = genos_virus_annotated,by = c("REF" = "REF", "POS" = "POS","ALT"="ALT"))
+
+```
+
+```{r}
+plink_virus_full_analysis_df=plink_virus_full_analysis_df[!(is.na(plink_virus_full_analysis_df$P)),]
+
+plink_virus_full_analysis_df=plink_virus_full_analysis_df[!(is.na(plink_virus_full_analysis_df$End)),]
+
+plink_virus_full_analysis_df=distinct(plink_virus_full_analysis_df)
+
+plink_virus_full_analysis_df=plink_virus_full_analysis_df %>% mutate(ID = paste0(`#CHROM`,":",POS))
+
+```
+
+```{r}
+Plink_virus_for_Manhattan=plink_virus_full_analysis_df
+
+Plink_virus_for_Manhattan$`#CHROM`[Plink_virus_for_Manhattan$`#CHROM`=="X"] <- 23
+
+Plink_virus_for_Manhattan$`#CHROM`= as.numeric(Plink_virus_for_Manhattan$`#CHROM`)
+
+Plink_virus_for_Manhattan=Plink_virus_for_Manhattan[!is.na(Plink_virus_for_Manhattan$`#CHROM`)]
+
+manhattan(Plink_virus_for_Manhattan,chr = "#CHROM",bp = "POS",snp ="ID",p = "P" ,col = c("red3","lightblue","yellow4","purple","pink","tan","maroon","black","grey44","turquoise","blue","orange","magenta","brown4","gold","purple4","lightblue4","yellow","green4","navy","grey70","lightgreen","khaki3"),chrlabs = c(1:22,"X"),annotatePval = 0.0005,annotateTop = T,suggestiveline = T)
+```
+
+```{r}
+qq(plink_virus_full_analysis_df$P)
+```
+
+```{r}
+plink_virus_full_analysis_df=plink_virus_full_analysis_df[,-c("BILX_1","CUHK_1","EOJR_2","FFDC_1","OILG_1","PODX_1")]
+
+
+plink_virus_full_analysis_df_deleterious= plink_virus_full_analysis_df[plink_virus_full_analysis_df$SIFT_pred=="D"|plink_virus_full_analysis_df$PROVEAN_pred=="D"|MutationTaster_pred=="D"|Polyphen2_HDIV_pred=="D"|ExonicFunc.ensGene=="stoploss"|ExonicFunc.ensGene=="stopgain"|ExonicFunc.ensGene=="frameshift deletion"|ExonicFunc.ensGene=="frameshift insertion"|ExonicFunc.ensGene=="nonframeshift deletion"|ExonicFunc.ensGene=="nonframeshift insertion",]
+```
+
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# 1) Convert symbols to Entrez IDs
+entrez <- bitr(plink_virus_full_analysis_df_deleterious$Gene.ensGene[plink_virus_full_analysis_df_deleterious$P<0.05],
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego <- enrichGO(gene         = entrez$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+dotplot(ego) + ggtitle("GO:BP enrichment")
+
+# 3) KEGG
+ekegg <- enrichKEGG(gene         = entrez$ENTREZID,
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+dotplot(ekegg, showCategory=20) + ggtitle("KEGG pathway enrichment")
+```
+```{r}
+ego
+```
+
+```{r}
+plink_virus_full_analysis_df_deleterious%>%dplyr::filter(P<0.05)%>%ggplot(aes(x=100*as.numeric(gnomad41_exome_AF), y=BETA))+
+  geom_point()+
+  scale_x_log10()+
+  labs(x="Allele freq (%)", y="Effect size (beta)")
+```
+
+```{r}
+plink_virus_full_analysis_df_deleterious[Gene.ensGene=="DNAH3" & P<0.005,c(1:10,194:334)]
+```
+
+
+```{r}
+library(dplyr)
+plink_total_heatmap_virus=plink_virus_full_analysis_df_deleterious[,c(1:10,12,16,194:334)]%>%
+  pivot_longer(cols = 13:153,names_to ="Cell_line" ,values_to = "GT")%>%
+  dplyr::filter(P<0.005,!GT=="./.")%>%
+  mutate(GT=if_else(GT=="0/0",0,if_else(GT=="1/1",2,1)))%>%
+  dplyr::group_by(Gene.ensGene,Cell_line)%>%
+  dplyr::summarise(GT=max(GT),.groups = "drop")%>%
+  pivot_wider(names_from = Cell_line,values_from =GT,values_fill = 0)
+```
+
+```{r}
+annotation_col <- pheno_virus %>%
+  dplyr::filter(IID %in% colnames(plink_total_heatmap_virus)) %>%
+  column_to_rownames("IID")%>%
+  dplyr::select(PC1)
+
+cell_order <- rownames(annotation_col)[order(annotation_col$PC1)]
+
+
+gene_list=plink_total_heatmap_virus$Gene.ensGene
+
+plink_total_heatmap_virus=as.matrix(plink_total_heatmap_virus[,cell_order])
+
+row.names(plink_total_heatmap_virus)=gene_list
+
+
+annotation_ord    <- annotation_col[cell_order, , drop = FALSE]
+
+
+
+pheatmap(plink_total_heatmap_virus,cluster_rows = TRUE,
+  cluster_cols = FALSE,annotation_col = annotation_ord,show_rownames = T,fontsize_col = 7)
+```
+
+```{r}
+plink_virus_high_chance=plink_virus_full_analysis_df_deleterious[(SIFT_pred=="D" & Polyphen2_HDIV_pred=="D" | PROVEAN_pred=="D" & SIFT_pred=="D" | Polyphen2_HDIV_pred=="D" & PROVEAN_pred=="D") & P < 0.01 & gnomad41_exome_AF <= 0.1]
+```
+
+```{r}
+plink_virus_high_chance_permissive=plink_virus_high_chance$Gene.ensGene[plink_virus_high_chance$T_STAT<0]
+
+plink_virus_high_chance_protective=plink_virus_high_chance$Gene.ensGene[plink_virus_high_chance$T_STAT>0]
+
+```
+
+```{r}
+entrez_significant <- bitr(plink_virus_high_chance_protective,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+dotplot(ego_significant) + ggtitle("GO:BP enrichment")
+```

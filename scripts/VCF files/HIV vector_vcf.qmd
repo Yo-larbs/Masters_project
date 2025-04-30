@@ -4,7 +4,9 @@ format: html
 editor: visual
 ---
 
-## loading
+## loading packages
+
+### environment manager
 
 ```{r}
 # If packrat is not installed, install it from CRAN
@@ -53,31 +55,44 @@ library(ggplot2)
 library(packrat)
 ```
 
+# loading in data
+
+so i need to load in the VCFs i will need to use for my analysis. First i list the files in eah phenotype, This contains the VCFs for the cell line in that phenotype
+
 ```{r}
 setwd("../..")
 Susceptible_vector_cells_List =list.files(path = "inputs/VCF/vector/Susceptible",full.names = T)
 Resistant_vector_cells_list=list.files(path = "inputs/VCF/vector/Resistant",full.names = T)
 ```
 
+Here i create a function which loads in and joins the VCFs together using variant annotation package, Granges object is able to be joined by being concatenated, I also add the cell line name (by taking it out of the file name)
+
 ```{r}
 join_VCF = function(x){
-  list= lapply(x, function(file) {
-    vc_obj=readVcf(file,"hg38")
-    gr=rowRanges(vc_obj)
-    cell_line <- substr(basename(file), 1, 6)
-    mcols(gr)$CellLine=cell_line
+  list= lapply(x, function(file) { #applies all of this to each value in list
+    vc_obj=readVcf(file,"hg38") #reads the VCF as hg38 (most up to date human genome at time of writing)
+    gr=rowRanges(vc_obj) # this extracts the rowranges(the actual genomic variant information)
+    cell_line <- substr(basename(file), 1, 6) #takes the cell line from the file name, imperfect as though most are 5 characters long, notably OARS_22 isn't
+    mcols(gr)$CellLine=cell_line #add a new column for the cell line
     return(gr)
     })
-  joint=do.call(c,list)
+  joint=do.call(c,list) # here i concatenate with every value of list as arguemnt
   return((joint))
 }
 ```
+
+I then apply this function to the list of cell line phenotypes obtained from the classification i hve done,
 
 ```{r}
 Susceptible_vector_cells_VCF=join_VCF(Susceptible_vector_cells_List)
 Resistant_vector_cells_VCF=join_VCF(Resistant_vector_cells_list)
 ```
 
+### fixing the VCF format
+
+the VCF often have multiple alleles per chromosome position, This makes it harder in further analysis as each variant is multi-allelic. So i expand my objects so its a single variant per line
+
+it works by replicating each line by the number of alleles it has, then i add the unlisted chromosome
 
 ```{r}
 expandGR <- function(gr) {
@@ -89,7 +104,7 @@ expandGR <- function(gr) {
   # Get the number of ALT alleles for each variant
   alt_counts <- elementNROWS(gr$ALT)
   
-  # Optionally, filter out variants with no ALT alleles
+  # filter out variants with no ALT alleles
   gr <- gr[alt_counts > 0]
   alt_counts <- elementNROWS(gr$ALT)
   
@@ -108,6 +123,8 @@ expandGR <- function(gr) {
 }
 ```
 
+here i apply the expansion
+
 ```{r}
 #head(Susceptible_vector_cells_VCF,30)
 #head(Resistant_vector_cells_VCF)
@@ -116,12 +133,18 @@ Resistant_vector_cells_VCF_expanded=expandGR(Resistant_vector_cells_VCF)
 
 ```
 
+### optional variant remover
+
+I give the option here to find the overlaps in two phenotype groups, Then i can take it out of each group making each variant unique to that one
+
 ```{r}
 #common_variants=GenomicRanges::match((Susceptible_vector_cells_VCF_expanded),(Resistant_vector_cells_VCF_expanded))
 #common_variants2=GenomicRanges::match((Resistant_vector_cells_VCF_expanded),(Susceptible_vector_cells_VCF_expanded))
 Susceptible_vector_cells_VCF_nonoverlaps <- Susceptible_vector_cells_VCF_expanded #[is.na(common_variants)]
 Resistant_vector_cells_VCF_nonoverlaps=Resistant_vector_cells_VCF_expanded #[is.na(common_variants2)]
 ```
+
+the files are very big so in order to keep R from crashing i set the non used VCF files to 0
 
 ```{r}
 Resistant_vector_cells_VCF=0
@@ -131,13 +154,9 @@ Susceptible_vector_cells_VCF_expanded=0
 
 ```
 
-```{r}
-Susceptible_vector_cells_VCF_nonoverlaps[ranges(Susceptible_vector_cells_VCF_nonoverlaps)=='78079609']
-```
+## pruning
 
-```{r}
-Resistant_vector_cells_VCF_nonoverlaps[ranges(Resistant_vector_cells_VCF_nonoverlaps)=='78079609']
-```
+The VCF contains many alternate chromosomes and unplaced chromosome, in order to further our analysis i need to remove some of those or align it to a set genomic sequence. Here is use the UCSC hg38, and i find the intersecting seqlevels (e.g chromosome names), I then take out the seqlevels that are not found in the UCSC genomic file. I need to do this now because i need the seq levels to be aligned to be able to find the coding changes or filter the coding regions
 
 ```{r}
 txdb=TxDb.Hsapiens.UCSC.hg38.refGene
@@ -149,7 +168,6 @@ intersecting_chrom=GenomicRanges::intersect(seqlevels(Susceptible_vector_cells_V
 Susceptible_vector_cells_VCF_nonoverlaps_2 <- keepSeqlevels(Susceptible_vector_cells_VCF_nonoverlaps, intersecting_chrom,pruning.mode = "coarse")
 
 ```
-
 
 ```{r}
 intersecting_chrom=intersect(seqlevels(Resistant_vector_cells_VCF_nonoverlaps),seqlevels(BSgenome.Hsapiens.UCSC.hg38))
@@ -165,9 +183,9 @@ Resistant_vector_cells_VCF_nonoverlaps=0
 Susceptible_vector_cells_VCF_nonoverlaps=0
 ```
 
-```{r}
-Hsapiens=(BSgenome.Hsapiens.UCSC.hg38)
-```
+## finding coding regions
+
+Here i take out the non coding regions and only keep the ones in the coding regions, i need to use a txdb file and a genomic file which is used to narrow is used to only get coding regions.
 
 ```{r}
 
@@ -185,6 +203,10 @@ var_alleles <- Susceptible_vector_cells_VCF_nonoverlaps_2$ALT
 Susceptible_vector_protein_VCF=predictCoding(query = Susceptible_vector_cells_VCF_nonoverlaps_2,subject = txdb,seqSource=BSgenome.Hsapiens.UCSC.hg38,varAllele = var_alleles)
 ```
 
+# cleaning up VCF
+
+for some values of the VCF the ALT allele is "" meaning that there was no variant for that position (maybe due to low coverage) within the package this is stored as "". This cant be put in annovar so it needs to be removed
+
 ```{r}
 Susceptible_vector_protein_VCF=Susceptible_vector_protein_VCF[!Susceptible_vector_protein_VCF$ALT=='']
 ```
@@ -193,15 +215,15 @@ Susceptible_vector_protein_VCF=Susceptible_vector_protein_VCF[!Susceptible_vecto
 Resistant_vector_protein_VCF=Resistant_vector_protein_VCF[!Resistant_vector_protein_VCF$ALT=='']
 ```
 
-```{r}
-Susceptible_vector_protein_VCF=Susceptible_vector_protein_VCF[!Susceptible_vector_protein_VCF$ALT=='']
-```
+# annovar
 
 ```{r}
 install.packages('annovarR')
 library(annovarR)
 
 ```
+
+Here i create avinput, which is one of the inputs that annovaR suports. I extract it from the VCF objet, and make it into a dataframe then output the file.
 
 ```{r}
 convertToAvinput <- function(gr, output_file) {
@@ -231,6 +253,10 @@ convertToAvinput(Resistant_vector_protein_VCF, output_file2)
 $PWD
 ```
 
+# running annovar
+
+Here i run annovar using refGene (instead of ensGene), this is because i used refGene Txdb to take the coding regions so i don't want to conflict, I run it for both phenotypes
+
 ```{bash}
 
 perl ../../annovar/table_annovar.pl --buildver hg38 --out ../../output/annovar_output/Res_vector_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  ../../inputs/annovar_input/Resistant_vector_non_filtered.avinput ../../annovar/humandb
@@ -241,11 +267,15 @@ perl ../../annovar/table_annovar.pl --buildver hg38 --out ../../output/annovar_o
 perl ../../annovar/table_annovar.pl --buildver hg38 --out ../../output/annovar_output/Sus_vector_annovar_output --remove --protocol refGene,gnomad41_exome,clinvar_20140902,esp6500siv2_ea,dbnsfp42c --operation g,f,f,f,f --nastring "." --otherinfo --csvout  ../../inputs/annovar_input/Susceptibles_vector_non_filtered.avinput ../../annovar/humandb
 ```
 
+# loading in annovar
+
 ```{r}
 setwd('../../output/annovar_output/')
-Resistant_vector_cells_annovar_csv=read.csv("Res_vector_annovar_output.hg38_multianno.csv")
-Susceptible_vector_cells_annovar_csv=read.csv("Sus_vector_annovar_output.hg38_multianno.csv")
+Resistant_vector_cells_annovar_csv=read.csv("Res_annovar_output.hg38_multianno.csv")
+Susceptible_vector_cells_annovar_csv=read.csv("Sus_annovar_output.hg38_multianno.csv")
 ```
+
+Here i take the distinct values, this doesn't get rid of the same variant in different cell lines but if there were any legitimate duplicates this gets rid of them
 
 ```{r}
 Resistant_vector_cells_annovar_csv=distinct(Resistant_vector_cells_annovar_csv)
@@ -253,10 +283,16 @@ Susceptible_vector_cells_annovar_csv=distinct(Susceptible_vector_cells_annovar_c
 Susceptible_vector_cells_VCF_nonoverlaps_2[ranges(Susceptible_vector_cells_VCF_nonoverlaps_2)==55611892]
 ```
 
+Here i check the overlaps (if you left them in) and see which cell lines are in each of them
+
 ```{r}
 Resistant_vector_cells_annovar_csv$Otherinfo1[Resistant_vector_cells_annovar_csv$Start==5923202]
 Susceptible_vector_cells_annovar_csv$Otherinfo1[Susceptible_vector_cells_annovar_csv$Start==5923202]
 ```
+
+## cleaning up annovar output
+
+Here i specifically remove any intron variants that have been included (PredictCoding function filters out intergenic regions mostly), i do keep the exonic splicing regions, i also remove specific chromosomes that i wouldn't need (such as unplaced) and remove the synonymous SNV and any variants who couldn't be assigned regions (unknown)
 
 ```{r}
 Resistant_vector_cells_annovar_csv=Resistant_vector_cells_annovar_csv[(Resistant_vector_cells_annovar_csv$Func.refGene=="exonic"|Resistant_vector_cells_annovar_csv$Func.refGene=="exonic;splicing"),]
@@ -270,9 +306,27 @@ Susceptible_vector_cells_annovar_csv=Susceptible_vector_cells_annovar_csv[(Susce
 Susceptible_vector_cells_annovar_csv=Susceptible_vector_cells_annovar_csv[!(Susceptible_vector_cells_annovar_csv$ExonicFunc.refGene=="synonymous SNV"|Susceptible_vector_cells_annovar_csv$ExonicFunc.refGene=="unknown"|Susceptible_vector_cells_annovar_csv$Chr=="chrUn_GL000195v1"),]
 ```
 
+here we convert the output to numeric
+
 ```{r}
 Resistant_vector_cells_annovar_csv$gnomad41_exome_AF=as.numeric(Resistant_vector_cells_annovar_csv$gnomad41_exome_AF)
 Susceptible_vector_cells_annovar_csv$gnomad41_exome_AF=as.numeric(Susceptible_vector_cells_annovar_csv$gnomad41_exome_AF)
+```
+
+## removing intercepts
+
+if you didn't remove the intercepts within the VCF file, there is a script here that allows you to remove intercepts, it does this by assigning ids by pasting the information on each variant. Then i find the intersect with these IDs then i take them out
+
+```{r}
+Susceptible_vector_cells_annovar_csv=Susceptible_vector_cells_annovar_csv%>%mutate(ID=paste(Chr,Start,End,Ref,Alt,sep="_"))
+
+Resistant_vector_cells_annovar_csv=Resistant_vector_cells_annovar_csv%>%mutate(ID=paste(Chr,Start,End,Ref,Alt,sep="_"))
+
+intersect_variants=intersect(Susceptible_vector_cells_annovar_csv$ID,Resistant_vector_cells_annovar_csv$ID)
+
+Susceptible_vector_cells_annovar_csv=Susceptible_vector_cells_annovar_csv[!Susceptible_vector_cells_annovar_csv$ID%in%intersect_variants,]
+
+Resistant_vector_cells_annovar_csv=Resistant_vector_cells_annovar_csv[!Resistant_vector_cells_annovar_csv$ID%in%intersect_variants,]
 ```
 
 ```{r}
@@ -287,11 +341,11 @@ intersecting_genes=intersect(Resistant_vector_cells_annovar_csv$Gene.knownGene,S
 #Susceptible_vector_cells_annovar_csv=Susceptible_vector_cells_annovar_csv[!(Susceptible_vector_cells_annovar_csv$Gene.knownGene %in% intersecting_genes),]
 ```
 
-```{r}
-Resistant_vector_cells_annovar_csv=na.omit(Resistant_vector_cells_annovar_csv[!(Resistant_vector_cells_annovar_csv$gnomad41_exome_AF>0.001),])
-Susceptible_vector_cells_annovar_csv=na.omit(Susceptible_vector_cells_annovar_csv[!(Susceptible_vector_cells_annovar_csv$gnomad41_exome_AF>0.001),])
+#graphing data
 
-```
+## making counts
+
+I first set up 2 database where i group by chromosome and count the number that chromosome appears, this is to find the number of mutations in each chromosome. I find the average by dividing by the number of cell lines within that phenotype to make it a bit more comparable, This doesn't actually tell me much but is a good piece of data to have
 
 ```{r}
 library(ggplot2)
@@ -318,6 +372,8 @@ df_summary$Chr <- gsub("chr", "", df_summary$Chr, ignore.case = TRUE)
 
 ```
 
+Here i plot the bar graph showing the number of average mutations per chromosome
+
 ```{r}
 ggplot(data = df_summary,aes(x=Chr,y=Normalized))+
   geom_bar(stat = "identity",position = "dodge",aes(fill=Phenotype))+
@@ -328,6 +384,10 @@ ggplot(data = df_summary,aes(x=Chr,y=Normalized))+
   theme(axis.text.x = element_text(angle = 45))
   
 ```
+
+## max mutations in gene
+
+Here i group by gene and count how many times that gene comes up, this would tell me how muatated that gene is. There is no real need to normalise between the 2 phenotypes, It would only make sense if i normalised it by length, but thats more looking at how likely the gene is to be mutated, however i don't have information on the gene length. I then choose the top 20
 
 ```{r}
 ggplot(data = (unique(Resistant_vector_cells_annovar_csv)%>%group_by(Gene.refGene)%>%summarise(Count=n())%>%slice_max(Count,n=20)),aes(x=Gene.refGene,y = Count))+
@@ -352,55 +412,71 @@ unique(Susceptible_vector_cells_annovar_csv$Gene.knownGene)
 
 ```
 
+## further analyses
+
+Here i extract the Deleterious mutations predicted by Provean or SIFT i also first extract the unique gene and cell line combinations, I then group by gene and count the appearances, this allows me to see how commonly that gene was mutated across all the cell lines
+
 ```{r}
 library(dplyr)
 Resistant_vector_cells_annovar_csv_deleterious=unique(Resistant_vector_cells_annovar_csv[Resistant_vector_cells_annovar_csv$SIFT_pred=="D"|Resistant_vector_cells_annovar_csv$PROVEAN_pred=="D",])
 
 unique_genes_per_cell=Resistant_vector_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
-common_mutations_resistant=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+common_mutations_resistant_vector=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
 ```
 
 ```{r}
 Susceptible_vector_cells_annovar_csv_deleterious=unique(Susceptible_vector_cells_annovar_csv[Susceptible_vector_cells_annovar_csv$SIFT_pred=="D"|Susceptible_vector_cells_annovar_csv$PROVEAN_pred=="D",])
 
 unique_genes_per_cell=Susceptible_vector_cells_annovar_csv_deleterious%>%dplyr::distinct(Gene.refGene,Otherinfo1)
-common_mutations_susceptible=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
+common_mutations_susceptible_vector=unique_genes_per_cell%>%dplyr::group_by(Gene.refGene)%>%dplyr::summarise(common=n())%>%arrange(desc(common))
 ```
 
+Here i plot the most mutated genes across cell lines(so in how many cell lines is this gene mutated in?)
+
 ```{r}
-ggplot(data = common_mutations_susceptible%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+ggplot(data = common_mutations_susceptible_vector%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
   geom_bar(stat="identity",width= 0.05)+
   geom_point(size=3,colour = "grey")+
   theme_minimal()
 ```
 
 ```{r}
-ggplot(data = common_mutations_resistant%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
+ggplot(data = common_mutations_resistant_vector%>%slice_max(common,n=10),aes(x=Gene.refGene,y=common))+
   geom_bar(stat="identity",width= 0.05)+
   geom_point(size=3,colour = "grey")+
   theme_minimal()
 ```
 
 ```{r}
-common_mutations_susceptible[common_mutations_susceptible$Gene.refGene %in%(setdiff(common_mutations_susceptible$Gene.refGene,common_mutations_resistant$Gene.refGene)),]
+common_mutations_susceptible_vector[common_mutations_susceptible_vector$Gene.refGene %in%(setdiff(common_mutations_susceptible_vector$Gene.refGene,common_mutations_resistant_vector$Gene.refGene)),]
 ```
 
+## getting unique mutations
+
+So in this graph i plot in how many cell lines are these genes mutated but i remove all the common genes between the phenotype, This can give insight but may get rid of actual candidate genes because 2 mutations in a gene may cause different effects
+
 ```{r}
-ggplot(data = common_mutations_susceptible[common_mutations_susceptible$Gene.refGene %in%(setdiff(common_mutations_susceptible$Gene.refGene,common_mutations_resistant$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+ggplot(data = common_mutations_susceptible_vector[common_mutations_susceptible_vector$Gene.refGene %in%(setdiff(common_mutations_susceptible_vector$Gene.refGene,common_mutations_resistant_vector$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
   geom_bar(stat="identity",width= 0.5)+
   theme_minimal()
 ```
 
 ```{r}
-common_mutations_resistant[common_mutations_resistant$Gene.refGene %in%(setdiff(common_mutations_resistant$Gene.refGene,common_mutations_susceptible$Gene.refGene)),]
+common_mutations_resistant_vector[common_mutations_resistant_vector$Gene.refGene %in%(setdiff(common_mutations_resistant_vector$Gene.refGene,common_mutations_susceptible_vector$Gene.refGene)),]
 ```
 
+Here i do the same for the other phenotype
+
 ```{r}
-ggplot(data = common_mutations_resistant[common_mutations_resistant$Gene.refGene %in%(setdiff(common_mutations_resistant$Gene.refGene,common_mutations_susceptible$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
+ggplot(data = common_mutations_resistant_vector[common_mutations_resistant_vector$Gene.refGene %in%(setdiff(common_mutations_resistant_vector$Gene.refGene,common_mutations_susceptible_vector$Gene.refGene)),]%>%slice_max(common,n=12),aes(x=Gene.refGene,y=common))+
   geom_bar(stat="identity",width= 0.5)+
   theme_minimal()
 
 ```
+
+## heatmap
+
+here i make a dataframe for the heatmap by seeing how many specific variant appears in a specific cell line, trying to see if there is a visible difference in general mutational profile between phenotypes
 
 ```{r}
 heatmap_df_susceptible=unique(Susceptible_vector_cells_annovar_csv_deleterious)%>%group_by(Otherinfo1,Gene.refGene)%>%summarise(MutationCount=n(),Phenotype="Susceptible",.groups = "drop")
@@ -440,6 +516,8 @@ binary_long <- pivot_longer(heatmap_df_2,
                             values_to = "Mutation")
 ```
 
+This is another version of the heatmap just giving a value of 1 if it has a mutation there, it would be pink if it doens't and the white represents what would be NAs (the gene wasn't mutated at all within that cell line)
+
 ```{r}
 ggplot(data = binary_long,aes(x=Gene.refGene,y=CellLine,fill =(Mutation)))+
   geom_tile()+
@@ -454,4 +532,45 @@ Resistant_vector_unique_deleterious=Resistant_vector_cells_annovar_csv_deleterio
 sink("list for gene ontology.txt",)
 cat(paste(Resistant_vector_unique_deleterious,collapse = '\n'))
 sink()
+```
+
+## finding the highest difference in mutations
+
+as i said earlier, just looking at genes which are not in either list is not the best way to compare, and it may be best to look at the difference in how common the mutation in across cell types between the 2 phenotypes. E.g if 16/20 of one phenotype have that gene mutated but only 1 /20 of the other phenotype it may reveal further information
+
+So here i make a "rate" which is the rate of mutation across the cell lines, so it is a fraction of all the cell lines and give it a phenotype column for when i fuse it
+
+```{r}
+common_mutations_resistant_vector$phenotype='Resistant'
+common_mutations_resistant_vector$rate=common_mutations_resistant_vector$common/length(Resistant_vector_cells_list)
+common_mutations_susceptible_vector$phenotype='Susceptible'
+common_mutations_susceptible_vector$rate=common_mutations_susceptible_vector$common/length(Susceptible_vector_cells_List)
+```
+
+Here i get rid of the genes that are only exclusive to one phenotype since i already looked at those
+
+```{r}
+common_genes_vector=intersect(common_mutations_susceptible_vector$Gene.refGene,common_mutations_resistant_vector$Gene.refGene)
+```
+
+```{r}
+common_mutations_resistant_vector[common_mutations_resistant_vector$Gene.refGene%in%common_genes_vector,]
+```
+
+so now i merge the dataframes to create a table of how common each gene is between ecah cell line and can compare the difference in how common it is
+
+```{r}
+common_rates_vector=merge.data.frame(x=common_mutations_resistant_vector[common_mutations_resistant_vector$Gene.refGene%in%common_genes_vector,],y=common_mutations_susceptible_vector[common_mutations_susceptible_vector$Gene.refGene%in%common_genes_vector,],by.x = 'Gene.refGene',by.y = 'Gene.refGene')
+```
+
+here i subtract the rate of one from the rate of the other one. This gives one value which tells us which gene is more mutated in which phenotype. If the value is positive it is more common in resistant while if it is negative it is more common in susceptible. So by finding the largest value i can maybe find interesting genes
+
+```{r}
+common_rates_vector$Proportional_difference=common_rates_vector$rate.x-common_rates_vector$rate.y
+
+common_rates_vector=common_rates_vector%>%dplyr::rename(.,common_resistant=common.x)%>%
+  dplyr::rename(.,common_susceptible=common.y)
+
+common_rates_vector=common_rates_vector[,c(1,2,5,8)]
+
 ```

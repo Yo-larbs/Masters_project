@@ -1,0 +1,304 @@
+---
+title: "total_plink_vector_analysis"
+format: html
+editor: visual
+---
+
+# plink analysis
+
+```{r}
+#install.packages('qqman')
+#BiocManager::install("clusterProfiler",)
+#BiocManager::install("org.Hs.eg.db")
+#install.packages("ggplotify")
+#install.packages("pheatmap")
+#install.packages("gprofiler2")
+library(ggplotify)
+library(ggplot2)
+library(qqman)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(readr)
+library(pheatmap)
+library(gprofiler2)
+
+```
+
+# general overview
+i wanted to compare all the cell lines based on the PC1 from the classification
+so i ran the plink workflow (see plink_vector_analysis.qmd) on all the cell lines together and ran a linear logisistic based on the PC1. I had to make a new phenotype file stating all the cell lines. I had to
+
+general workflow
+1. reheadering all cell lines (in case some weren't)
+2. merge all cell lines
+3. trim all non exomic regions using exome file from 
+
+
+```{r}
+getwd()
+total_Plink_vector=fread('../../output/VCF/Plink_output/vector/Total_cell_line/total_vector_assoc_results.PC1.glm.linear')
+```
+
+```{r}
+total_Plink_vector = total_Plink_vector %>% mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
+    POS2 = case_when(
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),          # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    ) 
+  ) %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+```{r}
+setwd('../../output/annovar_output/')
+
+plink_total_annovar_vector=read.csv('Total_cell_line_anno.hg38_multianno.csv') %>%  dplyr::rename(
+CHROM = Chr,
+POS   = Start,
+REF   = Ref,
+ALT   = Alt ) %>% dplyr::select(CHROM, POS, REF, ALT, everything())
+
+
+```
+
+```{r}
+setwd('../../output/')
+genos_vector_wide <- read_tsv("genotypes.withheader.tsv", col_names = T)
+colnames(genos_vector_wide) <- c("CHROM","POS","REF","ALT", colnames(genos_vector_wide)[5:ncol(genos_vector_wide)])
+
+```
+
+```{r}
+library(dplyr)
+sample_names=colnames(genos_vector_wide[,-c(1,2,3,4)])
+pheno_vector=read_tsv('../../inputs/plink_total_cell_line_vector_phenotype.txt')
+
+```
+
+
+```{r}
+plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ALT=='*'),]
+
+plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ExonicFunc.ensGene=='synonymous SNV'),]
+
+plink_total_annovar_vector=plink_total_annovar_vector[(plink_total_annovar_vector$Func.ensGene=='exonic'|plink_total_annovar_vector$Func.ensGene=='ncRNA_exonic'|plink_total_annovar_vector$Func.ensGene=='exonic;splicing'|plink_total_annovar_vector$Func.ensGene=='splicing'|plink_total_annovar_vector$Func.ensGene=='ncRNA_exonic;splicing'|plink_total_annovar_vector$Func.ensGene=='splicing'),]
+
+```
+
+```{r}
+genos_vector2 <- genos_vector_wide %>% 
+  mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
+    POS2 = case_when(
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),          # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    )
+  ) %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+```{r}
+plink_total_annovar_vector=as.data.table(plink_total_annovar_vector)
+
+anno_unique <- plink_total_annovar_vector[
+  , .SD[1],                           # pick the first row in each group
+  by = .(CHROM,POS,REF,ALT)          # grouping columns
+]
+
+genos_vector2=as.data.table(genos_vector2)
+pheno_vector=as.data.table(pheno_vector)
+
+setkeyv(anno_unique, c("CHROM","POS","REF","ALT"))
+setkeyv(genos_vector2, c("CHROM","POS","REF","ALT"))
+setkey(pheno_vector, "IID")
+
+genos_vector_annotated <- anno_unique[genos_vector2]   # fast, keyed join
+
+```
+
+
+```{r}
+genos_vector_annotated=genos_vector_annotated[!is.na(genos_vector_annotated$End)]
+```
+
+```{r}
+
+plink_vector_full_analysis_df= left_join(x = total_Plink_vector ,y = genos_vector_annotated,by = c("REF" = "REF", "POS" = "POS","ALT"="ALT"))
+
+```
+
+
+```{r}
+plink_vector_full_analysis_df=plink_vector_full_analysis_df[!is.na(plink_vector_full_analysis_df$P)]
+
+plink_vector_full_analysis_df=plink_vector_full_analysis_df[!is.na(plink_vector_full_analysis_df$End)]
+
+plink_vector_full_analysis_df=distinct(plink_vector_full_analysis_df)
+
+plink_vector_full_analysis_df=plink_vector_full_analysis_df %>% mutate(ID = paste0(`#CHROM`,":",POS))
+
+```
+
+```{r}
+Plink_vector_for_Manhattan=plink_vector_full_analysis_df
+
+Plink_vector_for_Manhattan$`#CHROM`[Plink_vector_for_Manhattan$`#CHROM`=="X"] <- 23
+
+Plink_vector_for_Manhattan$`#CHROM`= as.numeric(Plink_vector_for_Manhattan$`#CHROM`)
+
+Plink_vector_for_Manhattan=Plink_vector_for_Manhattan[!is.na(Plink_vector_for_Manhattan$`#CHROM`)]
+
+manhattan(Plink_vector_for_Manhattan,chr = "#CHROM",bp = "POS",snp ="ID",p = "P" ,col = c("red3","lightblue","yellow4","purple","pink","tan","maroon","black","grey44","turquoise","blue","orange","magenta","brown4","gold","purple4","lightblue4","yellow","green4","navy","grey70","lightgreen","khaki3"),chrlabs = c(1:22,"X"),annotatePval = 0.0005,annotateTop = T,suggestiveline = T)
+```
+
+```{r}
+qq(plink_vector_full_analysis_df$P)
+```
+
+```{r}
+plink_vector_full_analysis_df=plink_vector_full_analysis_df[,-c("BILX_1","CUHK_1","EOJR_2","FFDC_1","OILG_1","PODX_1")]
+
+
+plink_vector_full_analysis_df_deleterious= plink_vector_full_analysis_df[plink_vector_full_analysis_df$SIFT_pred=="D"|plink_vector_full_analysis_df$PROVEAN_pred=="D"|MutationTaster_pred=="D"|Polyphen2_HDIV_pred=="D"|ExonicFunc.ensGene=="stoploss"|ExonicFunc.ensGene=="stopgain"|ExonicFunc.ensGene=="frameshift deletion"|ExonicFunc.ensGene=="frameshift insertion"|ExonicFunc.ensGene=="nonframeshift deletion"|ExonicFunc.ensGene=="nonframeshift insertion",]
+```
+
+
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# 1) Convert symbols to Entrez IDs
+entrez <- bitr(plink_vector_full_analysis_df_deleterious$Gene.ensGene[plink_vector_full_analysis_df_deleterious$P<0.01],
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego <- enrichGO(gene         = entrez$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+dotplot(ego) + ggtitle("GO:BP enrichment")
+
+# 3) KEGG
+ekegg <- enrichKEGG(gene         = entrez$ENTREZID,
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+dotplot(ekegg, showCategory=20) + ggtitle("KEGG pathway enrichment")
+```
+
+```{r}
+plink_vector_full_analysis_df_deleterious%>%dplyr::filter(P<0.05)%>%ggplot(aes(x=100*as.numeric(gnomad41_exome_AF), y=BETA))+
+  geom_point()+
+  scale_x_log10()+
+  labs(x="Allele freq (%)", y="Effect size (beta)")
+```
+
+```{r}
+plink_total_heatmap_vector=plink_vector_full_analysis_df_deleterious[,c(1:10,16,194:334)]%>%
+  pivot_longer(cols = 12:152,names_to ="Cell_line" ,values_to = "GT",)%>%
+  filter(P<0.005,!GT=="./.")%>%
+  mutate(GT=if_else(GT=="0/0",0,if_else(GT=="1/1",2,1)))%>%
+  dplyr::group_by(Gene.ensGene,Cell_line)%>%
+  dplyr::summarise(GT=max(GT),.groups = "drop")%>%
+  pivot_wider(names_from = Cell_line,values_from =GT,values_fill = 0)
+```
+
+```{r}
+annotation_col <- pheno_vector %>%
+  dplyr::filter(IID %in% colnames(plink_total_heatmap_vector)) %>%
+  column_to_rownames("IID")%>%
+  dplyr::select(PC1)
+
+cell_order <- rownames(annotation_col)[order(annotation_col$PC1)]
+
+
+gene_list=plink_total_heatmap_vector$Gene.ensGene
+
+plink_total_heatmap_vector=as.matrix(plink_total_heatmap_vector[,cell_order])
+
+row.names(plink_total_heatmap_vector)=gene_list
+
+
+annotation_ord    <- annotation_col[cell_order, , drop = FALSE]
+
+
+
+pheatmap(plink_total_heatmap_vector,cluster_rows = TRUE,
+  cluster_cols = FALSE,annotation_col = annotation_ord,show_rownames = T,fontsize_col = 7)
+```
+
+```{r}
+plink_vector_high_chance=plink_vector_full_analysis_df_deleterious[(SIFT_pred=="D" & Polyphen2_HDIV_pred=="D" | PROVEAN_pred=="D" & SIFT_pred=="D" | Polyphen2_HDIV_pred=="D" & PROVEAN_pred=="D") & P < 0.05 & gnomad41_exome_AF <= 0.1]
+```
+
+```{r}
+plink_vector_high_chance_permissive=plink_vector_high_chance$Gene.ensGene[plink_vector_high_chance$T_STAT<0]
+
+plink_vector_high_chance_protective=plink_vector_high_chance$Gene.ensGene[plink_vector_high_chance$T_STAT>0]
+
+```
+
+```{r}
+gost(query = list(plink_vector_high_chance_permissive, plink_vector_high_chance_protective), 
+      organism = "hsapiens", 
+      correction_method = "fdr",
+      sources = c("GO:BP","REAC"))
+```
+```{r}
+entrez_significant <- bitr(plink_vector_high_chance_permissive,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+dotplot(ego_significant) + ggtitle("GO:BP enrichment")
+```
+
+```{r}
+cat(paste(unique(plink_vector_full_analysis_df_deleterious$Gene.ensGene[plink_vector_full_analysis_df_deleterious$P<0.05 & plink_vector_full_analysis_df_deleterious$gnomad41_exome_AF>0.2])),sep = ",")
+```
+
