@@ -1,0 +1,293 @@
+---
+title: "EQTL-analysis"
+format: html
+editor: visual
+---
+
+```{r}
+#install.packages("MatrixEQTL")
+library(MatrixEQTL)
+library(dplyr)
+library(data.table)
+library(readr)
+library(stringr)
+library(biomaRt)
+library(qqman)
+library(org.Hs.eg.db)
+```
+
+```{r}
+RNA_list=list.files("../../inputs/Neo_RNA-seq/",full.names = T)
+
+RNA_csv_list=list()
+
+for (i in RNA_list){
+cell_name=gsub(pattern = "counts.*.csv",replacement = "",basename(i))
+csv_file=read.csv(i)
+colnames(csv_file)[3]=cell_name
+RNA_csv_list[[cell_name]]=csv_file
+rm(csv_file)
+}
+
+RNA_csv=Reduce(function(x,y) merge(x,y,all=T),RNA_csv_list)
+
+for (i in 4:length(RNA_csv)){
+colnames(RNA_csv)[i]=gsub(pattern = "_P.*",replacement = "",colnames(RNA_csv)[i])
+colnames(RNA_csv)=toupper(colnames(RNA_csv))
+}
+
+colnames(RNA_csv)=sub("\\.\\d+$","",colnames(RNA_csv))
+
+```
+
+```{r}
+df=RNA_csv[,4:length(RNA_csv)]
+colnames(df)=sub("\\.\\d+$","",colnames(df))
+
+
+
+df=lapply(split.default(df,unique(colnames(df)))
+,function(x) rowMeans(x,))
+
+
+df= do.call(cbind,args = df)
+RNA_csv=cbind(RNA_csv[,c(1:3)],df)
+```
+
+```{r}
+RPKM=((RNA_csv[,c(4:length(RNA_csv))]*1000)/(RNA_csv[,2]))
+
+TPM_eQTL=data_frame(RPKM)
+for (i in 1:ncol(RPKM)){
+TPM_eQTL[,i]=log2((RPKM[,i]*(1/sum(RPKM[,i]))*1000000)+1)
+}
+
+```
+
+```{r}
+write_file(paste0(colnames(TPM_eQTL),collapse = "\n"),file = "./Cell_line_list_for_eQTL.txt")
+paste0(colnames(TPM_eQTL),collapse = ",")
+length(colnames(TPM_eQTL))
+```
+
+```{r}
+eQTL_geno=tibble(fread("../../inputs/VCF/compressed/eQTL/plink_eQTL_geno.traw"))
+eQTL_PCA=fread("../../inputs/VCF/compressed/eQTL/plink_eQTL.eigenvec")
+colnames(eQTL_geno)=sub(pattern = "0_",replacement = "",x = colnames(eQTL_geno))
+rownames(eQTL_PCA)=eQTL_PCA$`#IID`
+#eQTL_PCA=eQTL_PCA[!(eQTL_PCA$`#IID`)]
+eQTL_PCA=t(eQTL_PCA)
+colnames(eQTL_PCA)=eQTL_PCA[1,]
+eQTL_PCA=eQTL_PCA[2:5,]
+```
+
+```{r}
+setdiff(colnames(TPM_eQTL),y = colnames(eQTL_PCA))
+
+TPM_eQTL=TPM_eQTL[!colnames(TPM_eQTL)%in%c("MOMT_2","OTAM_2","WOTS_2")]
+TPM_eQTL=cbind(RNA_csv$GENEID,TPM_eQTL)
+TPM_eQTL=TPM_eQTL%>%rename("GENEID"="RNA_csv$GENEID")
+```
+
+```{r}
+eQTL_geno[,7:length(eQTL_geno)]=abs(eQTL_geno[,7:length(eQTL_geno)]-2)
+
+eQTL_geno = eQTL_geno %>% mutate(
+# detect pure insertions (COUNTED is single base, ALT starts with that base)
+  
+is_ins = nchar(ALT) > nchar(COUNTED) & nchar(COUNTED)==1 & str_sub(ALT,1,1)==COUNTED,
+
+# shift POS for those events
+
+is_del = nchar(COUNTED) > nchar(ALT) & nchar(ALT)==1 & str_sub(COUNTED,1,1)==ALT,
+
+# detect pure deletions (ALT is single base, COUNTED starts with that base)
+POS2 = case_when(
+is_ins ~ POS + 1L,
+is_del ~ POS + 1L,
+TRUE   ~ POS
+),
+
+REF2 = case_when(
+# strip off the anchor base in the sequences
+is_ins ~ "-",                      # insertion → anchor stripped
+is_del ~ str_sub(COUNTED, 2),          # delete the first base
+TRUE   ~ COUNTED
+),
+
+ALT2 = case_when(
+is_ins ~ str_sub(ALT, 2),          # drop the first base
+is_del ~ "-",                      # deletion → anchor stripped
+TRUE   ~ ALT
+)
+) %>%
+dplyr::select(-POS,-COUNTED,-ALT,-is_ins,-is_del) %>%
+dplyr::rename(POS=POS2, COUNTED=REF2, ALT=ALT2)
+```
+
+```{r}
+eQTL_geno$SNP_ID=paste0(eQTL_geno$CHR,":",eQTL_geno$POS,":",eQTL_geno$COUNTED,eQTL_geno$ALT)
+eQTL_geno=distinct(eQTL_geno)
+eQTL_geno=eQTL_geno[rowSums(eQTL_geno[,4:57])>4,]
+eQTL_geno=distinct(eQTL_geno)
+eQTL_SNP=eQTL_geno[,c(1,58:61)]
+eQTL_geno=eQTL_geno[,c(61,1:60)]
+eQTL_geno=eQTL_geno[,c(1,5:58)]
+```
+
+```{r}
+rownames(TPM_eQTL)=TPM_eQTL$GENEID
+TPM_eQTL=TPM_eQTL[,2:length(TPM_eQTL)]
+TPM_eQTL=as.matrix(TPM_eQTL)
+TPM_eQTL=TPM_eQTL[rowSums(counts(TPM_eQTL)>0.5)>=10,]
+
+eQTL_geno=data.frame(na.omit(eQTL_geno))
+rownames(eQTL_geno)=eQTL_geno$SNP_ID
+eQTL_geno=eQTL_geno[,2:length(eQTL_geno)]
+eQTL_geno=as.matrix(eQTL_geno)
+
+eQTL_SNP=eQTL_SNP[,c(5,1,2)]
+eQTL_PCA=as.matrix(eQTL_PCA)
+```
+
+```{r}
+snps <- SlicedData$new();  snps$CreateFromMatrix(as.matrix(eQTL_SNP))
+cvrs = SlicedData$new(); cvrs$CreateFromMatrix(eQTL_PCA)
+genos = SlicedData$new(); genos$CreateFromMatrix(eQTL_geno)
+exprs= SlicedData$new(); exprs$CreateFromMatrix(TPM_eQTL)
+```
+
+```{r}
+mart <- useEnsembl(biomart="ensembl",
+dataset="hsapiens_gene_ensembl")
+genes <- rownames(TPM_eQTL)# your expression matrix rownames
+
+map_df <- getBM(
+filters    = "entrezgene_id",
+attributes = c("entrezgene_id","chromosome_name","start_position","end_position"),
+values     = genes,
+mart       = mart
+)
+
+# 3) filter/map only those you found
+genepos <- map_df %>%
+dplyr::rename(
+Gene = entrezgene_id,
+Chr  = chromosome_name,
+left  = start_position,
+right = end_position) %>%
+distinct(Gene, .keep_all = TRUE)
+
+# Make sure you have exactly the same set of genes (and no duplicates)
+#stopifnot(all(rownames(TPM_eQTL) %in% genepos$Gene))
+```
+
+```{r}
+missing=setdiff(rownames(TPM_eQTL),genepos$Gene)
+intersecting_id=intersect(rownames(TPM_eQTL),genepos$Gene)
+
+TPM_eQTL=TPM_eQTL[rownames(TPM_eQTL)%in%intersecting_id,]
+
+
+```
+
+```{r}
+common_snps = intersect(rownames(eQTL_geno), eQTL_SNP$SNP_ID)
+eQTL_geno2 = eQTL_geno[common_snps, ]
+
+eQTL_SNP2 = eQTL_SNP %>%
+filter(SNP_ID %in% common_snps) %>%
+arrange(match(SNP_ID, common_snps))
+
+stopifnot( identical( rownames(eQTL_geno2), eQTL_SNP2$SNP_ID ) )
+
+eQTL_SNP2=as.data.frame(eQTL_SNP2)
+rownames(eQTL_SNP2)=eQTL_SNP2$SNP_ID
+```
+
+```{r}
+snps <- SlicedData$new();  snps$CreateFromMatrix(as.matrix(eQTL_SNP2))
+genos = SlicedData$new(); genos$CreateFromMatrix(eQTL_geno2)
+cvrs = SlicedData$new(); cvrs$CreateFromMatrix(eQTL_PCA)
+exprs= SlicedData$new(); exprs$CreateFromMatrix(TPM_eQTL)
+```
+
+```{r}
+#arrange(match(SNP_ID, common_snps))
+Mat_eQTL=Matrix_eQTL_main(snps = genos,gene = exprs,cvrt = cvrs,snpspos=eQTL_SNP2,genepos = genepos,output_file_name.cis    = "eQTLs.txt",pvOutputThreshold.cis = 1e-5,pvOutputThreshold = 1e-8 ,useModel  = modelLINEAR,cisDist   = 1e5, )
+```
+
+```{r}
+Expr_matrix_fastQTL=cbind(genepos,TPM_eQTL)
+Expr_matrix_fastQTL=Expr_matrix_fastQTL%>%rename("start"="left","end"="right")
+Expr_matrix_fastQTL=Expr_matrix_fastQTL[,c(2:4,1,5:58)]
+```
+
+```{r}
+Expr_matrix_fastQTL=Expr_matrix_fastQTL%>%dplyr::rename("gene_id"="Gene","chr"="Chr")
+Expr_matrix_fastQTL=Expr_matrix_fastQTL[Expr_matrix_fastQTL$chr%in%c(1:22,"X","Y","M"),]
+```
+
+```{r}
+Expr_matrix_fastQTL=Expr_matrix_fastQTL[rowSums(Expr_matrix_fastQTL[,5:58])>5,]
+```
+
+```{r}
+write.table(Expr_matrix_fastQTL,
+file = gzfile("../../inputs/VCF/compressed/FastQTL/expression_for_fastqtl.bed.gz"),
+sep = "\t",
+quote = FALSE,
+row.names = FALSE,
+col.names = TRUE
+)
+```
+
+```{r}
+write.table(
+eQTL_PCA,
+file = file("../../inputs/VCF/compressed/FastQTL/covariates.txt"),
+sep = "\t",
+quote = FALSE,
+row.names = TRUE,
+col.names = TRUE
+)
+```
+
+```{r}
+Fastqtl=fread("../../inputs/VCF/compressed/fastqtl_expected_output.txt",header = F)
+
+
+setnames(Fastqtl, c(
+"gene_id",     # 1
+"n_snps",      # 2
+"beta_shape1", # 3
+"beta_shape2", # 4
+"dummy",       # 5
+"best_snp",    # 6
+"best_distance",#7
+"nominal_p",   # 8
+"slope",       # 9
+"perm_direct_p",#10
+"perm_beta_p"  # 11
+))
+
+
+Fastqtl$gene_symbol=mapIds(
+x         = org.Hs.eg.db,
+keys      = as.character(Fastqtl$gene_id),
+column    = "SYMBOL",      # what you want back
+keytype   = "ENTREZID",    # what your current IDs are
+multiVals = "first")
+```
+
+```{r}
+qq(Fastqtl$perm_beta_p)
+```
+
+```{r}
+qq(Mat_eQTL$trans$eqtls$FDR)
+```
+
+```{r}
+View(Mat_eQTL$trans$eqtls)
+```
