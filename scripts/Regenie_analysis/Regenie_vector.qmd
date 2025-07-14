@@ -1,0 +1,548 @@
+---
+title: "Regenie_vector"
+format: html
+editor: visual
+---
+
+# Regenie analysis
+
+```{r}
+#install.packages('qqman')
+#BiocManager::install("clusterProfiler",)
+#BiocManager::install("org.Hs.eg.db")
+#install.packages("ggplotify")
+#install.packages("pheatmap")
+library(ggplotify)
+library(ggplot2)
+library(qqman)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(readr)
+library(pheatmap)
+library(gprofiler2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+
+```
+
+```{r}
+getwd() 
+total_Regenie_vector=fread('../../output/VCF/Regenie/Vector/re_assoc_vector_PHENO.regenie')
+total_Regenie_vector$P=10^-(total_Regenie_vector$LOG10P)
+total_Regenie_vector=total_Regenie_vector%>%dplyr::select(!c(EXTRA)) %>%
+  dplyr::rename(
+    "POS"= GENPOS,
+    "REF"= ALLELE0,
+    "ALT"= ALLELE1
+  )
+#total_Regenie_vector$Q=p.adjust(total_Regenie_vector$P, method ="holm")
+```
+
+```{r}
+total_Regenie_vector_lambda <- total_Regenie_vector %>%
+  mutate(
+    CHI2 = qchisq(1 - P, df = 1)
+  )
+
+lambda <- median(total_Regenie_vector_lambda$CHI2, na.rm = TRUE) / qchisq(0.5, df = 1)
+print(lambda)
+```
+
+
+```{r}
+total_Regenie_vector = total_Regenie_vector %>% mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF) == 1 & str_sub(ALT, 1, 1) == REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT) == 1 & str_sub(REF, 1, 1) == ALT,
+    # shift POS only for single-base deletions (REF length exactly 2 here)
+    POS2 = case_when(
+      is_del & (nchar(REF) - nchar(ALT) == 1) ~ POS + 1L,
+      TRUE                                    ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),         # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    )
+  )  %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+```{r}
+setwd('../../output/annovar_output/')
+
+plink_total_annovar_vector=read.csv('Total_cell_line_anno3.hg38_multianno.csv') %>%  dplyr::rename(
+CHROM = Chr,
+POS   = Start,
+REF   = Ref,
+ALT   = Alt ) %>% dplyr::select(CHROM, POS, REF, ALT, everything())
+
+setwd('../../output/')
+genos_vector_wide <- fread("genotypes.withheader.tsv",sep ="\t",header = T )
+colnames(genos_vector_wide) <- c("CHROM","POS","REF","ALT", colnames(genos_vector_wide)[5:ncol(genos_vector_wide)])
+
+
+```
+
+```{r}
+library(dplyr)
+sample_names=colnames(genos_vector_wide[,-c(1,2,3,4)])
+pheno_vector=read_tsv('../../inputs/VCF/plink_vector_phenotype.txt')
+
+
+```
+
+```{r}
+plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ALT=='*'),]
+
+plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ExonicFunc.ensGene49=='synonymous SNV'|plink_total_annovar_vector$ExonicFunc.ensGene49=='unknown'),]
+
+plink_total_annovar_vector=plink_total_annovar_vector[(plink_total_annovar_vector$Func.ensGene49=='exonic'|plink_total_annovar_vector$Func.ensGene49=='ncRNA_exonic'|plink_total_annovar_vector$Func.ensGene49=='exonic;splicing'|plink_total_annovar_vector$Func.ensGene49=='splicing'|plink_total_annovar_vector$Func.ensGene49=='ncRNA_exonic;splicing'|plink_total_annovar_vector$Func.ensGene49=='splicing'),]
+
+```
+
+```{r}
+genos_vector2 <- genos_vector_wide %>% 
+   mutate(
+    # detect pure insertions (REF is single base, ALT starts with that base)
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF) == 1 & str_sub(ALT, 1, 1) == REF,
+    # detect pure deletions (ALT is single base, REF starts with that base)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT) == 1 & str_sub(REF, 1, 1) == ALT,
+    # shift POS only for single-base deletions (REF length exactly 2 here)
+    POS2 = case_when(
+      is_del & (nchar(REF) - nchar(ALT) == 1) ~ POS + 1L,
+      TRUE                                    ~ POS
+    ),
+    # strip off the anchor base in the sequences
+    REF2 = case_when(
+      is_ins ~ "-",                      # insertion → anchor stripped
+      is_del ~ str_sub(REF, 2),         # delete the first base
+      TRUE   ~ REF
+    ),
+    ALT2 = case_when(
+      is_ins ~ str_sub(ALT, 2),          # drop the first base
+      is_del ~ "-",                      # deletion → anchor stripped
+      TRUE   ~ ALT
+    )
+  )  %>% 
+  dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
+  dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
+```
+
+```{r}
+plink_total_annovar_vector=as.data.table(plink_total_annovar_vector)
+
+anno_unique <- plink_total_annovar_vector[
+  , .SD[1],                           # pick the first row in each group
+  by = .(CHROM,POS,REF,ALT)          # grouping columns
+]
+genos_vector2=distinct(genos_vector2)
+genos_vector2=as.data.table(genos_vector2)
+pheno_vector=as.data.table(pheno_vector)
+
+setkeyv(anno_unique, c("CHROM","POS","REF","ALT"))
+setkeyv(genos_vector2, c("CHROM","POS","REF","ALT"))
+setkey(pheno_vector, "IID")
+
+genos_vector_annotated <- anno_unique[genos_vector2]   # fast, keyed join
+
+```
+
+cleaning up the data , (not all columns have a match)
+
+```{r}
+genos_vector_annotated=genos_vector_annotated[!is.na(genos_vector_annotated$End)]
+genos_vector_annotated=genos_vector_annotated%>%dplyr::select(!CHROM)
+```
+
+```{r}
+
+Regenie_vector_full_analysis_df= left_join(x = total_Regenie_vector ,y = genos_vector_annotated,by = c("REF" = "REF", "POS" = "POS","ALT"="ALT"))
+
+```
+
+```{r}
+Regenie_vector_full_analysis_df=Regenie_vector_full_analysis_df[!(is.na(Regenie_vector_full_analysis_df$P)),]
+
+Regenie_vector_full_analysis_df=Regenie_vector_full_analysis_df[!(is.na(Regenie_vector_full_analysis_df$End)),]
+
+Regenie_vector_full_analysis_df=distinct(Regenie_vector_full_analysis_df)
+
+Regenie_vector_full_analysis_df=Regenie_vector_full_analysis_df %>% mutate(ID = paste0(CHROM,":",POS))
+```
+
+```{r manhattan}
+Regenie_vector_for_Manhattan=Regenie_vector_full_analysis_df
+
+Regenie_vector_for_Manhattan$`#CHROM`[Regenie_vector_for_Manhattan$`#CHROM`=="X"] <- 23
+
+Regenie_vector_for_Manhattan$CHROM= as.numeric(Regenie_vector_for_Manhattan$CHROM)
+
+Regenie_vector_for_Manhattan=Regenie_vector_for_Manhattan[!is.na(Regenie_vector_for_Manhattan$CHROM),]
+
+bmp("Regenie_manhattan_plot.bmp", width = 3200, height = 1600,res = 300 )
+manhattan(Regenie_vector_for_Manhattan,chr = "CHROM",bp = "POS",snp ="ID",p = "P" ,col = c("red3","lightblue","orange4","purple","pink","tan","maroon","black","grey44","turquoise","blue","orange","magenta","brown4","gold","purple4","lightblue4","yellow","navy","grey70","khaki3"),chrlabs = c(1:22),annotatePval = 0.0005,annotateTop = T,suggestiveline = T,highlight = overlapping_variants_regenie$ID,)
+dev.off()
+
+```
+
+```{r qqplot}
+png("Regenie_qqplot.png", width = 3200, height = 1600,res = 300)
+qq(Regenie_vector_full_analysis_df$P)
+dev.off()
+```
+
+```{r}
+Regenie_vector_full_analysis_df=as.data.table(Regenie_vector_full_analysis_df)
+Regenie_vector_full_analysis_df=Regenie_vector_full_analysis_df[,-c("CUHK_1","EOJR_2","FFDC_1","OILG_1","PODX_1")]
+
+
+Regenie_vector_full_analysis_df_deleterious <- Regenie_vector_full_analysis_df[
+  Regenie_vector_full_analysis_df$SIFT_pred == "D" |
+  Regenie_vector_full_analysis_df$PROVEAN_pred == "D" |
+  Regenie_vector_full_analysis_df$MutationTaster_pred == "D" |
+  Regenie_vector_full_analysis_df$Polyphen2_HDIV_pred == "D" |
+  Regenie_vector_full_analysis_df$Polyphen2_HDIV_pred == "P" |
+  Regenie_vector_full_analysis_df$SIFT4G_pred == "D" |
+  Regenie_vector_full_analysis_df$ExonicFunc.ensGene49 %in% c(
+    "stoploss",
+    "stopgain",
+    "frameshift deletion",
+    "frameshift insertion",
+    "nonframeshift deletion",
+    "nonframeshift insertion",
+    "frameshift subsitution",
+    "nonframeshift substitution"
+  ),
+]
+```
+
+```{r GO_dotplot}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# 1) Convert symbols to Entrez IDs
+entrez <- bitr(Regenie_vector_full_analysis_df_deleterious$Gene.ensGene49[Regenie_vector_full_analysis_df_deleterious$P<0.05],
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego <- enrichGO(gene         = entrez$ENTREZID,
+                universe     =  (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+               
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+png("general_GO.png", width = 3600, height = 1800,res = 300)
+dotplot(ego) + ggtitle("GO:BP enrichment")
+dev.off()
+```
+
+```{r Kegg_dotplot}
+# 3) KEGG
+ekegg <- enrichKEGG(gene         = entrez$ENTREZID,
+                    universe = (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+               
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+png("general_Ekegg.png", width = 1600, height = 1200,res = 300)
+dotplot(ekegg, showCategory=20) + ggtitle("KEGG pathway enrichment")
+dev.off()
+```
+
+```{r all_freq}
+png("all_freq.png", width = 3200, height = 1600,res = 300)
+Regenie_vector_full_analysis_df_deleterious%>%dplyr::filter(P<0.05)%>%ggplot(aes(x=100*as.numeric(gnomad41_exome_AF), y=BETA))+
+  geom_point()+
+  scale_x_log10()+
+  labs(x="Allele freq (%)", y="Effect size (beta)")
+dev.off()
+```
+
+```{r}
+library(dplyr)
+Regenie_total_heatmap_vector=Regenie_vector_full_analysis_df_deleterious[,c(1:2,4:10,12,13,16,192:332)]%>% #Take the relevant columns
+  pivot_longer(cols = 13:153,names_to ="Cell_line" ,values_to = "GT")%>% #pivot longer so that each cell line has a row
+  slice_min(order_by = P,prop = 0.005)%>%
+  dplyr::filter(!GT=="./.")%>% 
+  mutate(GT=if_else(GT=="0/0",0,if_else(GT=="1/1",2,1)))%>% # GT column refers to heterozygousity or homozygousity
+  dplyr::group_by(Gene.ensGene49,Cell_line)%>%
+  dplyr::summarise(GT=max(GT),.groups = "drop")%>%
+  pivot_wider(names_from = Cell_line,values_from =GT,values_fill = 0)
+```
+
+```{r}
+
+annotation_col <- pheno_vector %>% #select PC1 values for test 
+  dplyr::filter(IID %in% colnames(Regenie_total_heatmap_vector)) %>%
+  column_to_rownames("IID")%>%
+  dplyr::select(PC1)
+
+cell_order <- rownames(annotation_col)[order(annotation_col$PC1)] # here we order by PC1 in order for the heatmap to be ordered by PC1
+
+
+gene_list=Regenie_total_heatmap_vector$Gene.ensGene49 
+
+Regenie_total_heatmap_vector=as.matrix(Regenie_total_heatmap_vector[,cell_order])
+
+row.names(Regenie_total_heatmap_vector)=gene_list
+
+
+annotation_ord    <- annotation_col[cell_order, , drop = FALSE]
+
+colour <- colorRampPalette(c("#Eeeff1","#9ecae1","#3182bd"))(10)
+
+bmp("heatmap_gene_grouped.bmp", width = 7000, height = 4000,res = 500)
+pheatmap(Regenie_total_heatmap_vector,cluster_rows = T,
+  cluster_cols = FALSE,annotation_col = annotation_ord,show_rownames = T,fontsize_col = 5,legend_breaks = c(0,1,2),color = colour,legend_labels = c("not present","heterozygous","homozygous"),fontsize = 6)
+dev.off()
+```
+
+```{r}
+Regenie_total_heatmap_vector=Regenie_vector_full_analysis_df_deleterious[,c(1:2,4:10,12,13,16,192:332)]%>% #Take the relevant columns
+  pivot_longer(cols = 13:153,names_to ="Cell_line" ,values_to = "GT")%>% #pivot longer so that each cell line has a row
+  slice_min(order_by = P,prop = 0.005)%>%
+  dplyr::filter(!GT=="./.")%>% 
+  mutate(GT=if_else(GT=="0/0",0,if_else(GT=="1/1",2,1)))%>% # GT column refers to heterozygousity or homozygousity
+  dplyr::group_by(ID,Gene.ensGene49,Cell_line)%>%
+  dplyr::summarise(GT=max(GT),.groups = "drop")%>%
+  pivot_wider(names_from = Cell_line,values_from =GT,values_fill = 0)
+```
+
+```{r}
+annotation_col <- pheno_vector %>%
+  dplyr::filter(IID %in% colnames(Regenie_total_heatmap_vector)) %>%
+  column_to_rownames("IID")%>%
+  dplyr::select(PC1)
+
+cell_order <- rownames(annotation_col)[order(annotation_col$PC1)]
+
+Regenie_total_heatmap_vector$mutation=paste0(Regenie_total_heatmap_vector$Gene.ensGene49,"  ",Regenie_total_heatmap_vector$ID)
+gene_list=Regenie_total_heatmap_vector$mutation
+
+Regenie_total_heatmap_vector=as.matrix(Regenie_total_heatmap_vector[,cell_order])
+
+row.names(Regenie_total_heatmap_vector)=gene_list
+
+
+annotation_ord    <- annotation_col[cell_order, , drop = FALSE]
+
+
+colour <- colorRampPalette(c("#Eeeff1","#9ecae1","#3182bd"))(10)
+
+bmp("heatmap.bmp", width = 7000, height = 4000,res = 500)
+pheatmap(Regenie_total_heatmap_vector,cluster_rows = T,
+  cluster_cols = FALSE,annotation_col = annotation_ord,show_rownames = T,fontsize_col = 5,legend_breaks = c(0,1,2),color = colour,legend_labels = c("not present","heterozygous","homozygous"),fontsize = 6)
+dev.off()
+```
+
+## taking extreme
+
+We take the extremely Deleterious and rare variants
+
+```{r}
+
+
+Regenie_vector_high_chance <- Regenie_vector_full_analysis_df_deleterious %>%
+  filter(
+    (SIFT4G_pred == "D" & Polyphen2_HDIV_pred == "D") |
+    (PROVEAN_pred == "D" & SIFT4G_pred        == "D") |
+    (Polyphen2_HDIV_pred == "D" & PROVEAN_pred == "D")|
+      (SIFT4G_pred=="."|PROVEAN_pred == "."|Polyphen2_HDIV_pred=="."),
+    P                < 0.01,
+    gnomad41_exome_AF <= 0.05|gnomad41_exome_AF=="."
+  )
+
+```
+
+take it out by permissive and protective
+
+```{r}
+Regenie_vector_high_chance_permissive=Regenie_vector_high_chance$Gene.ensGene49[Regenie_vector_high_chance$BETA<0]
+
+Regenie_vector_high_chance_protective=Regenie_vector_high_chance$Gene.ensGene49[Regenie_vector_high_chance$BETA>0]
+
+```
+
+redo GO and KEGG for the high significance
+
+## GO susceptible
+
+```{r GO_very_significant susceptible}
+entrez_significant <- bitr(Regenie_vector_high_chance_permissive,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
+                universe = (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+png("GO_susceptible.png", width = 2600, height = 1800,res = 300)
+dotplot(ego_significant) + ggtitle("GO:BP enrichment Suscepetible")
+dev.off()
+```
+
+```{r Kegg_dotplot susceptible}
+# 3) KEGG
+ekegg_significant <- enrichKEGG(gene         = entrez_significant$ENTREZID,
+                                universe = (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+png("ekegg_susceptible.png", width = 2400, height = 1800,res = 300)
+dotplot(ekegg_significant, showCategory=20) + ggtitle("KEGG pathway enrichment Susceptible")
+dev.off()
+```
+
+## GO for resistant
+
+```{r GO_very_significant resistant}
+entrez_significant <- bitr(Regenie_vector_high_chance_protective,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
+                universe = (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+png("GO_resistant.png", width = 2400, height = 1200,res = 300)
+dotplot(ego_significant) + ggtitle("GO:BP enrichment resistant")
+dev.off()
+```
+
+```{r Kegg_dotplot resistant}
+# 3) KEGG
+ekegg_significant <- enrichKEGG(gene         = entrez_significant$ENTREZID,
+              universe = (bitr(Regenie_vector_full_analysis_df$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db))$ENTREZID,
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+png("ekegg_resistant.png", width = 2400, height = 1200,res = 300)
+dotplot(ekegg_significant, showCategory=20) + ggtitle("KEGG pathway enrichment resistant")
+dev.off
+```
+
+##significant deleterious and rare \### 1% allele frequency <0.01
+
+protective: GDF7,MERTK,MERTK,ENSG00000293268,SLC49A3,TUBB8,MUC6,MUC6,ARFGAP2,OR5L1,LRCOL1,GOLGA8K,ENSG00000293570
+
+### %5 allele frequency
+
+permissive: EDARADD,HACL1,PRPS1L1,MALRD1,MS4A5,TMEM223,C1QTNF9B,MCF2L,ZNF530
+
+protective: NBPF14,GDF7,RGPD3,MERTK,MERTK,ENSG00000293268,MUC4,SLC49A3,OR2B2,CLDN20,KCP,RECQL4,TUBB8,POLR3A,MUC6,MUC6,OTOG,ARFGAP2,SYTL2,RAB21,LRCOL1,HEATR5A,GOLGA6L7,GOLGA8K,MYOCD,ENSG00000293570,DHX34,EMID1
+
+## most significatn (may be deleterious)\<0.0005 P
+
+MERTK MERTK CAPN11 MUC12" "KCP"\
+PRUNE2 SLCO1B "FBXO39,ACSF2,SLC36A3,CES1,KIF26B,MYOCD,FNBP4,ATP2A3
+
+## very significant (not deleterious ?)
+
+"TTLL10","KIF26B","NCOA1","MERTK","ZNF501","MUC4",
+"SLC49A3","C4orf17","DCHS2","C6","ENSG00000250138" "SLC36A3","CAPN11" ,"KCP","AGBL2","FNBP4","NUP160","OR5G3","FAU","SLCO1B1","GLT8D2"          "GOLGA8T","GOLGA8K","CES1","CTC1","MYOCD","ACSF2","QRICH2" ,"TDRD12","FAM246C" ,BHLHE22  
+
+## most rare (p\<0.005)
+
+MTCH2,MUC12
+
+#overlapping with plink
+MERTK,SLC49A3,MUC6,ARFGAP2,EDARADD,HACL1,MALRD1,MS4A5,MCF2L,KCP,RECQL4,POLR3A,MTCH2,SYTL2,RAB21,MYOCD,TTLL10,PRUNE2,FBXO39,CES1,ATP2A3 
+
+
+
+```{r}
+overlapping_list=c("NBPF14","GDF7","RGPD3","MERTK","MERTK","ENSG00000293268","MUC4","SLC49A3","OR2B2","CLDN20","KCP","RECQL4","TUBB8","POLR3A","MUC6","OTOG","ARFGAP2","SYTL2","RAB21","LRCOL1","HEATR5A","GOLGA6L7","GOLGA8K","MYOCD","ENSG00000293570","DHX34","EMID1","EDARADD","HACL1","PRPS1L1","MALRD1","MS4A5","TMEM223","C1QTNF9B","MCF2L","ZNF530","TTLL10","KIF26B","NCOA1","MERTK","ZNF501","MUC4","SLC49A3","C4orf17","DCHS2","C6","ENSG00000250138","SLC36A3","CAPN11" ,"KCP","AGBL2","FNBP4","NUP160","OR5G3","FAU","SLCO1B1","GLT8D2","GOLGA8T","GOLGA8K","CES1","CTC1","MYOCD","ACSF2","QRICH2" ,"TDRD12","FAM246C","DNLZ","BHLHE22"
+)
+
+overlaps_regenie=Regenie_vector_full_analysis_df[Regenie_vector_full_analysis_df$Gene.ensGene49%in%overlapping_list&Regenie_vector_full_analysis_df$P<0.01]
+```
+
+
+```{r}
+overlapping_variants_regenie=overlaps_regenie[overlaps_regenie$ID%in%overlaps_plink$ID,]
+```
+
+```{r}
+overlapping_variants_regenie <- overlapping_variants_regenie %>%
+  filter(
+    (
+      (SIFT4G_pred == "D" & Polyphen2_HDIV_pred == "D") |
+      (PROVEAN_pred == "D" & SIFT4G_pred == "D") |
+      (Polyphen2_HDIV_pred == "D" & PROVEAN_pred == "D") |
+      (
+        (SIFT4G_pred == "." | PROVEAN_pred == "." | Polyphen2_HDIV_pred == ".") &  ExonicFunc.ensGene49 != "nonsynonymous SNV"
+      ) |
+      P < 0.0005
+    ) &
+    gnomad41_exome_AF < 0.5|gnomad41_exome_AF=="."
+  )
+  
+
+
+
+```
+
+`
+```{r}
+overlapping_variants_regenie=overlapping_variants_regenie[overlapping_variants_regenie$ID%in%overlapping_variants_plink2$ID,]
+```
+
+
+```{r GO_very_significant resistant}
+entrez_significant <- bitr(overlapping_variants_regenie$Gene.ensGene49,
+               fromType="SYMBOL", toType="ENTREZID",
+               OrgDb=org.Hs.eg.db)
+
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+#png("GO_resistant.png", width = 2400, height = 1200,res = 300)
+dotplot(ego_significant) + ggtitle("GO:BP enrichment resistant")
+#dev.off()
+```
+```{r Kegg_dotplot}
+# 3) KEGG
+ekegg <- enrichKEGG(gene         = entrez_significant$ENTREZID,
+              
+               
+                    organism     = 'hsa',
+                    pvalueCutoff = 0.05)
+#png("general_Ekegg.png", width = 1600, height = 1200,res = 300)
+dotplot(ekegg, showCategory=20) + ggtitle("KEGG pathway enrichment")
+#dev.off()
+```

@@ -1,0 +1,515 @@
+---
+title: "RNA-seq virus"
+format: html
+editor: visual
+---
+
+# actual RNA Seq analysis
+
+```{r}
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(clusterProfiler)
+```
+
+## loading up counts data
+
+here i load up counts data, i use Neos RNA (the redone ones) because the other set of RNAseq gave very poor results (no De genes), NEOs done at point before infection reflecting more accurate biology.
+
+```{r}
+RNA_list=list.files("../../inputs/Neo_RNA-seq/",full.names = T)
+```
+
+```{r}
+setwd('~/Documents/Masters_project/')
+HIV1_virus_data=read_csv('inputs/Cleaning_and_classification/HIV1_virus_collated_n0_uncleaned(Sheet1).csv')
+HIV1_virus_data=HIV1_virus_data[,c(2,6,9)]
+HIV1_virus_data=na.omit(HIV1_virus_data)
+HIV1_virus_data$cell_line=toupper(HIV1_virus_data$cell_line)
+
+```
+
+Here i load counts. there are about 54 unique cell lines and multiple replicates, each having its own df, replacing the "counts in the name"and putting each df in a list of df. I name the Df by the cell line.
+
+```{r}
+ RNA_csv_list=list()
+for (i in RNA_list){
+  cell_name=gsub(pattern = "counts.*.csv",replacement = "",basename(i)) #replace cell file name 
+  csv_file=read.csv(i)
+  colnames(csv_file)[3]=cell_name # name the colname of the RNA data for merging
+  RNA_csv_list[[cell_name]]=csv_file # save df in list 
+  rm(csv_file)
+}
+```
+
+here i merge all the df in the list of dataframe into one dataframe
+
+```{r}
+RNA_csv=Reduce(function(x,y) merge(x,y,all=T),RNA_csv_list)
+
+```
+
+load in phenotype, in this case its for virus, so contains list of cell names with susceptible or resistant (coded as 1 or 0)
+
+```{r}
+
+
+list_of_test_cells_virus=read.table("../../inputs/virus_phenotype.txt",sep = " ",header = T)
+
+RNA_csv_list=RNA_csv_list[]
+```
+
+## dealing with replicates
+
+there are multiple replicates, each with its unique code in the form of "\_P1" or "P2". for further analysis would need to collapse these replicates so to make it easier i remove the \_P. giving all the replicates the same name, however dplyr automatically displays indentical colnames with the form .1 or .2 . e.g AEHN_22.1 and AEHN_22.2
+
+```{r}
+for (i in 4:length(RNA_csv)){
+  colnames(RNA_csv)[i]=gsub(pattern = "_P.*",replacement = "",colnames(RNA_csv)[i])
+  colnames(RNA_csv)=toupper(colnames(RNA_csv))
+}
+
+```
+
+```{r}
+colnames(RNA_csv)[4]
+```
+
+here i filter out my test cell lines within the combined RNAseq counts table. Not all cell lines were RNA-seq only about 50/150 cell lines have the counts data.
+
+I suspect that the 50 are cell lines that NEO classified as extreme so , there is much overlap between our cell line lists. So here i filter out the cell lines that i didn't get as extremely resistant or susceptible
+
+```{r}
+remove_list=setdiff(colnames(RNA_csv)[4:length(RNA_csv)],list_of_test_cells_virus$IID) #find difference between my extreme cell line list and the RNA-seq data
+
+RNA_csv_virus=RNA_csv[,!(colnames(RNA_csv)%in%remove_list)] #filter out the non appearing cell lines
+rownames(RNA_csv_virus)=RNA_csv_virus$GENEID 
+RNA_csv_virus=RNA_csv_virus[,-c(1,2,3)]
+
+DE_virus_pheno=list_of_test_cells_virus[list_of_test_cells_virus$IID%in%intersect(colnames(RNA_csv)[4:length(RNA_csv)],list_of_test_cells_virus$IID),] #here i get a list of all my extreme cell lines that have RNA seq available with the phenotype
+
+DE_virus_pheno=DE_virus_pheno%>%mutate(phenotype=if_else(phenotype==2,"susceptible","resistant")) #turn 1 and 0 phenotype encoding into susceptible and resistant
+
+DE_virus_pheno$phenotype <- factor(
+  DE_virus_pheno$phenotype,
+  levels = c("resistant","susceptible")
+)
+
+```
+
+
+## setting up col data
+
+here since i explained earlier that i made all the cell lines replicates have the same name but displayed in form of AEHN_22.1 etc
+
+here i actually make them unique so now AEHN_22.2 is not just displayed as that but is actually stored as that value. then i load all the unique colnames into vector called runIDs. cell lines is a vector containing all the unique cell lines without specifying the replicate
+
+then i create a dataframe called colData which i load into DESEQ2. this contain the cell line and the specific run. E.g runID= AEHN_22.2 and Cell_line= AEHN_22.
+
+I then match the cell line with the phenotype and make a new df containing only the counts data from the Runs (my actual testing)
+
+```{r}
+colnames(RNA_csv_virus) <- make.unique(colnames(RNA_csv_virus))
+runIDs   <- colnames(RNA_csv_virus) # make cell lines unqiue
+cellLines <- sub("\\.\\d+$","", runIDs) #replace .1 or .2 in uinque cell lines
+
+colData <- data.frame(
+  runID    = runIDs,
+  cell_line = cellLines,
+  stringsAsFactors = FALSE
+)
+colData$phenotype <- DE_virus_pheno$phenotype[
+  match(colData$cell_line, DE_virus_pheno$IID)
+]
+
+# Finally, set the rownames to runID to align with countData
+rownames(colData) <- colData$runID
+
+
+
+colData=na.omit(colData)
+
+RNA_csv_virus=RNA_csv_virus[,colnames(RNA_csv_virus)%in%colData$runID]
+
+
+
+```
+
+Here i start my DEseq data set and i make the phenotype the testing groups
+
+i also collapse replicates by cell line (all cell line replicates are collapsed)
+
+next i get rid of extremely low counts data
+
+next i run PCA, hopefully there would be some separation by phenotype showing there is a lot of variation.
+
+```{r}
+#DE_virus=DESeqDataSetFromMatrix(countData = RNA_csv_virus,colData = colData,design =~ screen_nb + phenotype)
+
+DE_virus=DESeqDataSetFromMatrix(countData = RNA_csv_virus,colData = colData,design =~ phenotype)
+
+DE_virus=DESeq2::collapseReplicates(object =DE_virus,groupby = DE_virus$cell_line,run =DE_virus$runID )
+
+keep2 <- rowSums(counts(DE_virus) >= 10) >= 2 #gets rid of a row (gene) it less than 3 columns have less than 10, remember about 20 columns
+keep1 <- rowSums(counts(DE_virus)) >= 10 #gets rid of rows with less than 10 together
+DE_virus=DE_virus[keep2,]
+
+bmp("PCA_plot_virus.bmp",width = 1800,height = 1800,res = 300)
+DESeq2::plotPCA(object = rlog(
+DE_virus), intgroup = "phenotype",ntop = 1000)
+dev.off()
+
+top_var_genes <- head(order(rowVars(assay(rlog(
+DE_virus))), decreasing = TRUE), 500)
+
+plotPCA(rlog(
+DE_virus)[top_var_genes, ], intgroup = "phenotype")
+```
+
+```{r}
+
+
+DE_virus=DESeq(DE_virus,)
+
+```
+
+# analysing DEseq
+
+I use lfcshrink as my virus results had ballooning lfc and p values. lfcshrink reduces noise in genes with high variablility and low counts https://doi.org/10.1093/bioinformatics/bty895
+
+I also use mapIds from AnnotationDbi to convert entrez Ids to gene symbol
+
+```{r}
+DE_virus_results=lfcShrink(DE_virus,coef = "phenotype_susceptible_vs_resistant")
+summary(DE_virus_results,alpha==0.05)
+
+DE_virus_results$symbol <- mapIds(
+    x         = org.Hs.eg.db,
+    keys      = rownames(DE_virus_results),
+    column    = "SYMBOL",      
+    keytype   = "ENTREZID",    
+    multiVals = "first")
+```
+
+THis is how i actually see the outliers, DEseq2 doesn't naturally show them so this is a method i found to see the outliers and remove them
+
+```{r}
+m <- nrow(attr(DE_virus, "dispModelMatrix"))
+p <- ncol(attr(DE_virus, "dispModelMatrix"))
+cooksCutoff <- qf(0.99, p, m - p)
+cooksOutlier <- mcols(DE_virus)$maxCooks > cooksCutoff
+
+w <- which(cooksOutlier)
+rownames(DE_virus)[w]
+
+DE_virus_results$symbol[na.omit(match(rownames(DE_virus_results),rownames(DE_virus)[w]))]
+
+```
+
+here i remove and see the outliers
+
+```{r}
+DE_virus_results=na.omit(DE_virus_results)
+summary(DE_virus_results,alpha=0.05)
+
+```
+
+This is to just see the values used in DEseq2
+
+```{r}
+colData(DE_virus)
+table( colData(DE_virus)$runID, colData(DE_virus)$phenotype )
+
+#unique(colData(DE_virus)[, c(,"phenotype")])
+```
+
+Here i plot MA and see significant genes
+
+```{r}
+bmp("MA_plot_virus.bmp",width = 2400,height = 1600,res = 300)
+DESeq2::plotMA(DE_virus_results,alpha=0.05)
+dev.off()
+DE_virus_results[DE_virus_results$padj<0.05&abs(DE_virus_results$log2FoldChange)>2,]
+
+
+```
+
+This is a plot of dispersal estimates
+
+```{r}
+plotDispEsts(DE_virus)
+```
+
+```{r}
+
+```
+
+##plotting counts
+
+here i create a function taht plots counts, i do it by returning the data from the actual plot counts function then store the GeneId and symbol
+
+```{r}
+
+plot_counts=function(x){
+df=DESeq2::plotCounts(DE_virus,gene = x,intgroup = "phenotype",returnData = T)
+df$symbol=DE_virus_results$symbol[row.names(DE_virus_results)==x]
+df$ID=row.names(DE_virus_results)[row.names(DE_virus_results)==x]
+
+ggplot(df, aes(x = phenotype, y = count)) +
+  geom_jitter(width = 0.05, size = 2, alpha = 0.8,colour='black', fill='white',shape = 21 ) +
+ # pick a color you like
+  scale_y_log10() +       
+  labs(title    = (paste("Counts for", df$symbol)),
+       y        = "Normalized count",
+       x        = "Phenotype",
+       subtitle = (paste("GeneID: ",df$ID))) +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),axis.minor.ticks.y.left = element_line(colour = "black"))
+
+}
+
+plot_counts("254173")
+plot_counts("128178")
+plot_counts("340895")
+plot_counts("11128")
+plot_counts("84364")
+plot_counts("1066")
+plot_counts("10599")
+plot_counts("23011")
+plot_counts("93649")
+plot_counts("84074")
+plot_counts("91646")
+plot_counts("10461")
+plot_counts("26061")
+plot_counts("84179")
+plot_counts("54798")
+plot_counts("11131")
+plot_counts("221823")
+plot_counts("375616")
+plot_counts("9401")
+
+
+
+```
+
+Here i di my volcano plot and highlight "significant points) based on significance and LFC i then split these points into significantly lower or higher (more in resistant or in susceptible)
+
+```{r}
+library(dplyr)
+
+DE_virus_results$significant_points=DE_virus_results$padj<0.05&abs(DE_virus_results$log2FoldChange)>0.5
+
+ggplot(DE_virus_results,aes(x=log2FoldChange,y = -log10(padj)))+
+  geom_point(aes(colour = significant_points),show.legend = F)+
+  theme_classic()
+  
+significant_low_points= rownames(DE_virus_results)[DE_virus_results$significant_points==T & DE_virus_results$log2FoldChange<0]
+#vector containing downregulated genes
+
+significant_high_points= rownames(DE_virus_results)[(DE_virus_results$significant_points==T & DE_virus_results$log2FoldChange>0)]
+#vector containing upregulated genes
+
+```
+
+## plotting all significant
+
+here i plot all the significant genes
+
+```{r}
+significant_list=as.list(el(strsplit(x = (paste0(DE_virus_results$symbol[which(DE_virus_results$significant_points==T)],collapse = ",")),split = ",")))
+
+#take all the significant points and their symbol, paste them then divide them by comma (for some reason didn;t work without this step) then store as a list
+
+lapply(rownames(DE_virus_results)[DE_virus_results$symbol%in%significant_list],plot_counts)
+#apply my plot function to all values in said list
+```
+
+# GO
+
+here i try and do GO for all my genes,for this one i did get a result, this is for DE genes together
+
+```{r}
+entrez_significant <- as.list(rownames(DE_virus_results)[DE_virus_results$symbol%in%significant_list])
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant,
+                #universe = (bitr(plink_virus_full_analysis_df$Gene.ensGene,
+               #fromType="SYMBOL", toType="ENTREZID",
+               #OrgDb=org.Hs.eg.db))$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+#png("GO_susceptible.png", width = 1600, height = 1200,res = 300)
+dotplot(ego_significant) + ggtitle("GO:BP enrichment Suscepetible")
+#dev.off()
+```
+
+this is for genes expressed higher in susceptible
+
+```{r}
+entrez_significant <- significant_high_points
+# 2) GO Biological Process
+ego_significant <- enrichGO(gene         = entrez_significant,
+                #universe = (bitr(plink_virus_full_analysis_df$Gene.ensGene,
+               #fromType="SYMBOL", toType="ENTREZID",
+               #OrgDb=org.Hs.eg.db))$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pvalueCutoff = 0.05,
+                readable     = TRUE)
+
+#png("GO_susceptible.png", width = 1600, height = 1200,res = 300)
+dotplot(ego_significant) + ggtitle("GO:BP enrichment Suscepetible")
+#dev.off()
+```
+
+```{r}
+DE_virus_results[which(DE_virus_results$symbol==""),]
+
+```
+
+```{r}
+na.omit(DE_virus_results)[na.omit(DE_virus_results$symbol==""),]
+```
+
+#TPM calculation
+
+```{r}
+RNA_csv_virus[rownames(RNA_csv_virus)==10461,]
+```
+
+here i calculate the RPKM for all counts datat
+
+```{r}
+RPKM=((RNA_csv[,c(4:length(RNA_csv))]*1000)/(RNA_csv[,2]))
+```
+
+THen i calculate TPM , i specifcally use TPM +1 so that i can apply log transformation
+
+```{r}
+TPM=data_frame(RPKM)
+for (i in 1:ncol(RPKM)){
+  TPM[,i]=(RPKM[,i]*(1/sum(RPKM[,i]))*1000000)+1
+}
+TPM=log2(TPM)
+```
+
+```{r}
+```
+
+Here i remove unneeded samples (not in test) from my TPM
+
+```{r}
+remove_list=setdiff(colnames(TPM),list_of_test_cells_virus$IID)
+TPM_virus=TPM[,(colnames(TPM)%in%colData$runID)]
+
+```
+
+i split TPM into TPM for samples classified as resistant or susceptible
+
+```{r}
+TPM_virus_susceptible=TPM_virus[,(colnames(TPM_virus)%in% colData$runID[colData$phenotype=="susceptible"] )]
+
+TPM_virus_resistant=TPM_virus[,(colnames(TPM_virus)%in% colData$runID[colData$phenotype=="resistant"] )]
+```
+
+Now if i want to compare susceptible and resistant as groups like i did in DESEQ i need a way to collapse all the different cell lines into a susceptible group, this is what i do here, i take the average and for cell lines
+
+```{r}
+TPM_virus_susceptible_average=rowMeans(TPM_virus_susceptible)
+TPM_virus_resistant_average=rowMeans(TPM_virus_resistant)
+```
+
+here i combine the two average cell lines
+
+```{r}
+TPM_virus_DE=data_frame(susceptible=TPM_virus_susceptible_average,resistant=TPM_virus_resistant_average)
+```
+
+here i re add gene names and IDs and symbols, i already applied log2 earlier so no need to do it again
+
+```{r}
+TPM_virus_DE=cbind(RNA_csv[,1:3],TPM_virus_DE)
+
+#TPM_virus_DE$log2_susceptible=log2(TPM_virus_DE$susceptible)
+#TPM_virus_DE$log2_resistant=log2(TPM_virus_DE$resistant)
+TPM_virus_DE$log2fc=TPM_virus_DE$susceptible-TPM_virus_DE$resistant
+```
+
+here i capture the significant
+
+```{r}
+TPM_virus_DE_sig=TPM_virus_DE[(abs(TPM_virus_DE$log2fc)>1.5),]
+```
+
+here i overlap my TPM and DESEQ hits and give gene symbol
+
+```{r}
+TPM_virus_DE_sig$GENESYMBOL[TPM_virus_DE_sig$GENESYMBOL%in%DE_virus_results$symbol[DE_virus_results$significant_points==T]]
+```
+
+```{r}
+paste0(TPM_virus_DE_sig$GENEID[TPM_virus_DE_sig$GENESYMBOL%in%DE_virus_results$symbol[DE_virus_results$significant_points==T]],collapse = ",\"")
+```
+
+# creating Heatmap
+
+here we create a heatmap, we take the overlapping genes and filter them in the TPM, then we take the phenotype (this contains the susceptible and resistant data in PC1 quantitative), We use this to order heatmap columns by phenotype
+
+```{r}
+
+
+RPKM=((DE_virus_counts*1000)/(TPM_virus_DE_sig$LENGTH[match(rownames(DE_virus_counts),TPM_virus_DE_sig$GENEID)]))
+
+TPM=data.frame(RPKM)
+for (i in 1:ncol(RPKM)){
+  TPM[,i]=(RPKM[,i]*(1/sum(RPKM[,i]))*1000000)+1
+}
+TPM=log2(TPM)
+
+
+
+pheno_virus=read_tsv('../../inputs/VCF/plink_virus_phenotype.txt')
+pheno_virus=pheno_virus[pheno_virus$IID%in%DE_virus_pheno$IID,]
+#contains PC1
+
+pheno_virus=pheno_virus[order(pheno_virus$PC1,decreasing = T),]
+cell_list=pheno_virus$IID
+TPM=data.table(TPM)
+row.names(TPM)=c("APELA","LINC00458","LINC01969","CNTFR","COL1A1","OAF","UCMA","SP8","FOXC1","GBX2","VENTX","LOC283731","HMX1","IDO1","VWC2","MIR302A","MIR302C","MIR302D","NODAL","OTX2","IRX4","PDGFA","BAHCC1","ISLR2","PLEKHB1","CXCL5","RAB17","TBX1","TNNT2","VAV1","KAZALD1","FZD7","UTF1","TNRC18","RGS5","IER3","PKDCC","B3GNT7")
+
+
+TPM=t(scale(t(TPM)))
+
+#transposing removes rownames
+
+TPM=data.table(TPM)
+
+row.names(TPM)=c("APELA","LINC00458","LINC01969","CNTFR","COL1A1","OAF","UCMA","SP8","FOXC1","GBX2","VENTX","LOC283731","HMX1","IDO1","VWC2","MIR302A","MIR302C","MIR302D","NODAL","OTX2","IRX4","PDGFA","BAHCC1","ISLR2","PLEKHB1","CXCL5","RAB17","TBX1","TNNT2","VAV1","KAZALD1","FZD7","UTF1","TNRC18","RGS5","IER3","PKDCC","B3GNT7")
+
+annot <- data.frame(
+  phenotype = factor(DE_virus_pheno$phenotype),
+  row.names = DE_virus_pheno$IID
+)
+setcolorder(TPM,neworder = cell_list)
+```
+
+```{r}
+library(pheatmap)
+bmp("virus_RNAseq_heatmap.bmp",width = 3200,height = 2400,res = 300)
+pheatmap((TPM),cluster_rows = T,cluster_cols = F,annotation_col = annot,gaps_col = 11)
+dev.off()
+```
+
+# LIST OF DE GENES
+
+genesymbol
+ 
+APELA,LINC00458,LINC01969,CNTFR,COL1A1,OAF,UCMA,SP8,FOXC1,GBX2,VENTX,LOC283731,HMX1,IDO1,VWC2,MIR302A,MIR302C,MIR302D,NODAL,OTX2,IRX4,PDGFA,BAHCC1,ISLR2,PLEKHB1,CXCL5,RAB17,TBX1,TNNT2,VAV1,KAZALD1,FZD7,UTF1,TNRC18,RGS5,IER3,PKDCC,B3GNT7
+
+EntrezID
+100506013,100507428,101927230,1271,1277,220323,221044,221833,2296,2637,27287,283731,3166,3620,375567,407028,442895,442896,4838,5015,50805,5154,57597,57611,58473,6374,64284,6899,7139,7409,81621,8324,8433,84629,8490,8870,91461,93010
