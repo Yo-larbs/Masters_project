@@ -38,9 +38,10 @@ library(factoextra)
 setwd('~/Documents/Masters_project/')
 HIV1_virus_data=read_csv('inputs/Cleaning_and_classification/hiv1_virus_collated_n0_uncleaned(Sheet1).csv')
 ```
-## loading and cleaning data
-after we load in the csv we clean all the NA and remove the unneeded columns(contains some metadata)
 
+## loading and cleaning data
+
+after we load in the csv we clean all the NA and remove the unneeded columns(contains some metadata)
 
 ```{r}
 HIV1_virus_data=HIV1_virus_data[,c(2,6:9,11:15,17)]
@@ -65,7 +66,8 @@ here we separate by cell line which will help us in further anlaysis and editing
 virus_data_per_cell_line=HIV1_virus_data%>%nest_by(cell_line,.keep = T)
 ```
 
-### plotting 
+### plotting
+
 here we have a point plot which show the values for each volume across screens and replicates, this allows a general view of data to make sure that earlier transformation such as getting rid of decreased values have worked
 
 ```{r}
@@ -107,18 +109,22 @@ box_plot_virus
 class(HIV1_virus_data)
 ```
 
-## normalising between the screens
+## normalizing between the screens
 
-In order to get rid of any batch effects from the screening process, we want to find the zscore to normalise within the screen, this makes it more comparable between screens
+In order to get rid of any batch effects from the screening process, we want to find the zscore to normalize within the screen, this makes it more comparable between screens
 
-plot the boxplot for each screen, before normalisation
+plot the boxplot for each screen, before normalization
 
 ```{r unnormalised_boxplot}
 unnormalised_boxplot=ggplot(data = HIV1_virus_data,aes(y=assay_output, x=as.factor(screen_nb),group = screen_nb,))+
   geom_boxplot()+
-  ggtitle('change between screens')+
+  ggtitle('Before normalisation')+
+  xlab("Screen")+
+  ylab("Supernatant Gag")+
   theme_classic()
+bmp("unnormalised_boxplot.bmp",width = 3200 ,height = 2400,res = 500,pointsize = 300)
 unnormalised_boxplot
+dev.off()
 ```
 
 okay going to apply zscore to all values to standardise between, going to add 1.5 to make sure none are negative (so that logarithmic can be applied to it)
@@ -134,16 +140,19 @@ virus_data_per_cell_line=HIV1_virus_data%>%nest_by(cell_line,.keep = T)
 
 ```
 
-making box plot for after normalisation
+making box plot for after normalization
 
 ```{r normalised_boxplot}
 normalised_boxplot=ggplot(data = HIV1_virus_data,aes(y=zscore, x=as.factor(screen_nb),group = screen_nb,))+
   geom_boxplot()+
-  ggtitle('change between screens')+
+  ggtitle('after normalisation')+
+  xlab("Screen")+
+  ylab("Zscore")+
   theme_classic()
+bmp("normalised_boxplot.bmp",width = 3200 ,height = 2400,res = 500,pointsize = 300)
 normalised_boxplot
+dev.off()
 ```
-
 
 ### dealing with outliers
 
@@ -173,15 +182,52 @@ use this to remove outlying observations. per screen (per cell) there are 5 titr
 
 ```{r}
 all_outliers=purrr::map(virus_data_per_cell_line$data,outlier_function)
+
+HIV1_virus_data_outliers=bind_rows(all_outliers)%>%
+  group_by(cell_line,screen_nb,replicate)%>%
+  filter(((sum(is.na(outlier)))<3))
+
 HIV1_virus_data=bind_rows(all_outliers)%>%group_by(cell_line,screen_nb,replicate)%>%filter(((sum(is.na(outlier)))>2))
 
 ```
 
+## plotting to see outlier
+so in order to create a plot where you can see outliers, i took example cell lines with outlier replicates in them (more accurately a made a list of the cell lines i didn't want), i made 2 df
+
+df = I take all cell lines points (with outlier flag) then i trim it down to just cell lines that have a replicate in  the outlier df, i also create a max response that shows the max for said replicate (across all infection volumes)
+
+df2, this is just the outlier replicates with the max
+
+i plot for each cell line (using facet wrap), all the points in all the replicates for that cell line , then i draw a line across the max, then i highligh the outlier replicate in red 
+
+```{r}
+cell_for_plotting=c("CTR_M2_O5","TZM","Vuud_2")
+
+df=(bind_rows(all_outliers))[(bind_rows(all_outliers)$cell_line)%in%unique(HIV1_virus_data_outliers$cell_line[!HIV1_virus_data_outliers$cell_line%in%cell_for_plotting]),]%>%group_by(cell_line,screen_nb,replicate)%>%mutate(max_assay=max(zscore))
+
+df2=HIV1_virus_data_outliers[!HIV1_virus_data_outliers$cell_line%in%cell_for_plotting,]%>%group_by(cell_line,screen_nb,replicate)%>%mutate(max_assay=max(zscore))
+
+
+ggplot()+
+  geom_line(data=df,aes(y=(max_assay),x = interaction(replicate,screen),group = 1))+
+  geom_point(data=df2,aes(y=(max_assay),x = interaction(replicate,screen)),colour="red")+
+    geom_point(data=df,aes(y=(zscore),x = interaction(replicate,screen)),colour="black",shape=2,size=0.2)+
+
+  facet_wrap(~cell_line, scales = "free_y") +
+  #geom_boxplot(data=df,aes(y=(zscore),x = interaction(replicate,screen),),show.legend = T)+
+  
+  theme_classic()+
+  #ggtitle()+
+  xlab("Replicate.Screen")+
+  ylab("Ζscore")+
+  theme(text = element_text(size = 10))
+
+```
 
 
 ## finding parameters
 
-so now i have the normalised max mean percentage (in z score) A bit worried that by normalising it and getting rid of the difference it might affect results
+so now i have the normalized max mean percentage (in z score) A bit worried that by normalizing it and getting rid of the difference it might affect results
 
 finding now the area under the curve using AUC function
 
@@ -200,8 +246,8 @@ virus_data_per_cell_line=HIV1_virus_data%>%nest_by(cell_line,.keep = T)
 ```
 
 # fitting the curves
-Here we use a logarithmic $$a+b \times log_4(x-c)$$ with 3 parameters, a- y offset b- slope and c- x offset, to help plot the graph in our analysis a higher a and b should correspond to more permissive/susceptible and a lower c would correspond to less permissive. However this depends on how the data is fitted, the fit may mean these values aren't directly correlated with those phenotype
 
+Here we use a logarithmic $$a+b \times log_4(x-c)$$ with 3 parameters, a- y offset b- slope and c- x offset, to help plot the graph in our analysis a higher a and b should correspond to more permissive/susceptible and a lower c would correspond to less permissive. However this depends on how the data is fitted, the fit may mean these values aren't directly correlated with those phenotype
 
 ```{r}
 logarithmic_func <- function(x, a, b) {
@@ -251,6 +297,10 @@ virus_data_per_cell_line=purrr::map(virus_data_per_cell_line$data,fit_log)%>%bin
 
 here we apply the equation to predict using the coefficients found in our fitting, so we can plot it out
 
+Here i create function to apply plot
+i do this by predicting values for replicate using equation and coefficients from model, I add this to the  ,i then create plot with points from data and then create lines with predicted (it uses the volume so not true curve but good still)
+
+
 ```{r}
 apply_plot_log=function(i){
 i <- i %>%
@@ -295,7 +345,6 @@ c - min,d-max, b-slope, e- x offset a higher c and d and b should correspond to 
 
 I use Drc (dose response package ) as they provide a robust 4 parameter fitting with drm function, i then take the coefficients out of the model and store them, per replicate
 
-
 ```{r}
 # Correct 4PL formula (parentheses fix)
 logistic_func <- function(x, b, d, e,c){
@@ -333,6 +382,9 @@ virus_data_per_cell_line <- purrr::map(virus_data_per_cell_line$data,logistic_fi
 
 
 ```
+
+Here i create function to apply plot
+i do this by predicting values for replicate using equation and coefficients from model, I add this to the  ,i then create plot with points from data and then create lines with predicted (it uses the volume so not true curve but good still)
 
 ```{r}
 apply_plot_logistic <- function(i) {
@@ -395,12 +447,26 @@ names(logistic_plot_virus)=virus_data_per_cell_line$cell_line
 logistic_plot_virus
 ```
 
+## checking standard deviation between replicates and screens
+here i calculate SD for all bterween replicates and then calculate the SD for every cell lines, i use this to justify averaging the cell line values. I use the list of Df of all cell times to prevent having to split by cell line
 
 ```{r}
 SD_table=data.frame()
 
 for (i in virus_data_per_cell_line[2][[1]]){
-  SD_table=rbind(SD_table,distinct(i%>%group_by(screen_nb,replicate)%>%mutate(max_zscore=max(zscore))%>%ungroup()%>%summarise(cell_line=cell_line,mean_max_zscore=mean(max_zscore),SD_max_zscore=sd(max_zscore),CV_z  =(SD_max_zscore/mean_max_zscore)*100,mean_AUC=mean(abs(area_under_curve)),SD_AUC=sd((abs(area_under_curve))),CV_AUC  = (SD_AUC/mean_AUC)*100)))
+  SD_table=rbind(SD_table,distinct(i%>%group_by(screen_nb,replicate)%>% 
+                                     mutate(max_zscore=max(zscore))%>%
+                                     ungroup()%>%
+                                     summarise(
+                                       cell_line=cell_line,
+                                       mean_max_zscore=mean(max_zscore),
+                                       SD_max_zscore=sd(max_zscore),
+                                       CV_z=(SD_max_zscore/mean_max_zscore)*100,
+                                       mean_AUC=mean(abs(area_under_curve)),
+                                       SD_AUC=sd((abs(area_under_curve))),
+                                       CV_AUC  = (SD_AUC/mean_AUC)*100)
+                                   )
+                 )
 }
 ```
 
@@ -408,8 +474,6 @@ for (i in virus_data_per_cell_line[2][[1]]){
 mean(SD_table$SD_max_zscore[c(1:10,12:113,115:152)])
 mean(na.omit(SD_table$SD_AUC))#[c(1:10,12:113,115:152)])
 ```
-
-
 
 # averaging and cleaning data
 
@@ -442,9 +506,7 @@ HIV1_virus_data_mean <- HIV1_virus_data_mean %>%
 
 ```
 
-In this i only take the max zscore(as thats what the parameter is) so i get rid of all values that weren't the max zscore (so normally for the min volume or the 5th titre)
-due to my earlier code where i got made all values<80% equal to the max, i could get multiple rows where the max zscore is the same so i apply the unique() to get only distinct rows
-
+In this i only take the max zscore(as thats what the parameter is) so i get rid of all values that weren't the max zscore (so normally for the min volume or the 5th titre) due to my earlier code where i got made all values\<80% equal to the max, i could get multiple rows where the max zscore is the same so i apply the unique() to get only distinct rows
 
 ```{r}
 HIV1_virus_data_PCA=unique(HIV1_virus_data_mean%>%group_by(cell_line,screen_nb)%>%
@@ -458,7 +520,7 @@ HIV1_virus_data_PCA=unique(HIV1_virus_data_mean%>%group_by(cell_line,screen_nb)%
                                        area_under_curve=area_under_curve))
 ```
 
-Here i take only the parameters that are actually going to be used in my analysis. For the vector , the logarithmic couldn't fit the data in any way that made sense, the algorithm i used had to overfit which caused the coeffecients to be completely meaningless with little to no correlation, So they're were removed 
+Here i take only the parameters that are actually going to be used in my analysis. For the vector , the logarithmic couldn't fit the data in any way that made sense, the algorithm i used had to overfit which caused the coeffecients to be completely meaningless with little to no correlation, So they're were removed
 
 ```{r}
 
@@ -523,7 +585,6 @@ PCA=prcomp(x = HIV1_virus_data_PCA_1)
 
 I generate a graph to show me my contributions for each principle component, normally majority of difference in variance is explained by PC1 and PC2
 
-
 ```{r scree_plot}
 library(factoextra)
 fviz_eig(PCA)
@@ -582,21 +643,19 @@ PCA_dim1=ggplot(data = ind_coord,aes(x=Dim.1,y = 0,label=row.names(ind_coord)))+
 PCA_dim1
 ```
 
-
 #classification
 
-Here i work on my classification, because the PC1 is only about 50% means that i can't trust it properly classify my data, but just in case i keep the upper and lower 10% of the points for dimension 1
 
-but i also create a weighted score, combining both PC1 and PC2 to properly split up my data. I try to use it by taking the percentages of PC1 and PC2 and rescaling it to 100% and then multiplying the PC by its scaled percentage. When you look at the directions of parameters and the spread of the cell lines, assay output and area under curve seem to account for most of the variation, so by weighting the PC, you can classify more accurately the top and bottom quantiles.
 
-I also plot the points with k means clustering alogirthm, and i label based on the top quantiles for my combined score, i save the top and bottom 10% to their own dataframes for storage
+ i also create a weighted score, combining both PC1 and PC2 to properly split up my data. I try to use it by taking the percentages of PC1 and PC2 and rescaling it to 100% and then multiplying the PC by its scaled percentage.  This is as a backup way to take extreme (take 10%) however i have decided not to use this. Keeping it in for good documentation or to cross check
+
+I also plot the points with k means clustering alogirthm, and i label based on the top quantiles for my Dim.1 , i save the top and bottom 10% to their own dataframes for storage
 
 ```{r PCA classification}
 susceptible_virus_cell=ind_coord[(ind_coord$Dim.1 < quantile(ind_coord$Dim.1, 0.1)),]
 Resistant_virus_cell=ind_coord[(ind_coord$Dim.1 > quantile(ind_coord$Dim.1, 0.9)),]
 
-HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
-HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(Resistant_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
+
 
 set.seed(39)
 clusters <- kmeans(ind_coord[, c("Dim.1", "Dim.2")], centers = 10)
@@ -607,7 +666,7 @@ ind_coord$pc_combined=0.80*ind_coord$Dim.1 + 0.20*ind_coord$Dim.2
 
 PCA_classification=ggplot(data = ind_coord,aes(x=Dim.1,y = Dim.2,label=row.names(ind_coord)))+
   geom_point(size = 3,aes(colour = group))+
-  geom_label_repel(aes(label=ifelse(pc_combined < quantile(pc_combined, 0.1) | pc_combined > quantile(pc_combined, 0.9),row.names(ind_coord),'')),max.overlaps = 150)+
+  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord),'')),max.overlaps = 150)+
   xlab("PC1")+
   ylab("PC2")+
   theme_classic()
@@ -616,8 +675,8 @@ PCA_classification=ggplot(data = ind_coord,aes(x=Dim.1,y = Dim.2,label=row.names
 susceptible_virus_cell=ind_coord[(ind_coord$pc_combined < quantile(ind_coord$pc_combined, 0.1)),]
 Resistant_virus_cell=ind_coord[(ind_coord$pc_combined > quantile(ind_coord$pc_combined, 0.9)),]
 
-HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
-HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(Resistant_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
+
+
 bmp("PCA_classification.bmp",width = 3200,height = 2400,res = 500)
 PCA_classification
 dev.off()
@@ -630,10 +689,17 @@ HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_vir
 
 here i create the classification based on the clusters, i set the clusters and choose the most extreme groups, NOTE- k means code changes every time so i set the seed. if the seed is changed this code would have to be changed also
 
-
 ```{r}
 susceptible_virus_clusters=ind_coord[(ind_coord$group==9)|(ind_coord$group==5),]
-Resistant_virus_clusters=ind_coord[(ind_coord$group==8),]#|(ind_coord$group==6),]
+resistant_virus_clusters=ind_coord[(ind_coord$group==8),]#|(ind_coord$group==6),]
+
+HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
+HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(resistant_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
+
+HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_virus_data_susceptible)) %>%
+  mutate(phenotype = ifelse(row.names(.) %in% row.names(HIV_virus_data_resistant),
+                            "resistant",
+                            "susceptible"))
 ```
 
 ## visualising data split
@@ -651,6 +717,8 @@ Z_score_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_not
 Z_score_split
 ```
 
+here i look at a logarithmic (y offset) there is a solid split between the susceptible and resistant with suscpetibles consistenly having higher output
+
 ```{r a_log split}
 a_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=a_log,colour = phenotype))+
   geom_point()+
@@ -659,6 +727,8 @@ a_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notab
         axis.ticks.x=element_blank())
 a_log_split
 ```
+
+here i look at b logarithmic (sloping ) there is a solid split between the susceptible and resistant with susceptibles consistenly having higher sloping
 
 ```{r b_log split}
 b_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=b_log,colour = phenotype))+
@@ -669,6 +739,8 @@ b_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notab
 b_log_split
 ```
 
+here i look at AUC (area under the curve ). There is not a solid split between these two, this is due to meausuring absolute area , so it measures dynamics instead of just value. Multiple resistant and susceptible have higher AUC when is more a measure of growth.
+
 ```{r AUC_split}
 AUC_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=area_under_curve,colour = phenotype))+
   geom_point()+
@@ -677,6 +749,8 @@ AUC_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable
         axis.ticks.x=element_blank())
 AUC_split
 ```
+
+Logistic variables not included in PCA but if code was to be rerun including it uncomment it, can still have the option to rerun it including logistic and see the separation
 
 ```{r b_logis}
 #b_logis=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=logis_b,colour = phenotype))+
@@ -693,6 +767,11 @@ AUC_split
   #geom_point()
 ```
 
+## ranking list
+
+Here i rank and gain the top cell lines in each parameter to see which cell lines appear the most,this is another way of separating the data but i don't prefer it
+
+i take the top 10% of each variable and find overlapping results to be my extreme, the problem is this would only give a small number of extremes. Another possible way is to take for example the top 3 or top10
 
 ```{r}
 virus_ranking=list()
@@ -743,6 +822,9 @@ print(unique(most_common_virus))
 common_virus_list=unique(most_common_virus)
 ```
 
+# exporting files
+
+here i export the quantitative and qualitative files quantitative of all cells and PC1 and then qualitative of the extremes with resistant/susceptible for phenotype
 
 ```{r}
 export_list_for_plink=ind_coord[,c(1,2)]
@@ -752,3 +834,11 @@ write_delim(x = export_list_for_plink,file = "plink_virus_phenotype.txt",delim =
 
 ```
 
+```{r}
+phenotype_virus_susceptible=data.frame("IID"=toupper(row.names(susceptible_virus_clusters)),"Phenotype"=2)
+phenotype_virus_resistant=data.frame("IID"=toupper(row.names(resistant_virus_clusters)),"phenotype"=1)
+
+phenotype_virus=rbind(phenotype_virus_susceptible,phenotype_virus_resistant)
+
+write_delim(x = phenotype_virus,file = "../../inputs/virus_phenotype.txt",delim = "\t")
+```
