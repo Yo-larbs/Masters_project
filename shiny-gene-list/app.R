@@ -13,10 +13,18 @@ library(bslib)
 library(shinythemes)
 library(plotly)
 #install.packages("htmlwidgets")
+
+#this is used to grab code from R markdown for the  data used in this app, takes about 10-30 seconds to run, I recommend running it the first time opening app and then commenting it out
+#as long as data from the cleaning and classification files are in the environment app can run
+ 
 #knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_vector.Rmd",output)
 #source(output)
 #knitr::purl("scripts/cell_line_classification/cleaning_and_classification_virus.Rmd",output)
 #source(output)
+
+
+
+#this is the main menu UI, which would act as a default
 main_menu=(
   
   card(
@@ -48,6 +56,10 @@ main_menu=(
   )
 
   
+
+# this is the ui for the cell lines specific graphs. it is dynamic and therefore would change based on which cell line is chose
+# 6 graphs split between 2 tabs
+
 specific_graph=(
   navset_tab(id = "assay_selection",header = actionButton("back_button",label = "",icon = icon("circle-xmark")),
     nav_panel("Vector_cell",
@@ -76,31 +88,33 @@ specific_graph=(
   
   
   
-  # Application title
-  
-  # Show a plot of the generated distribution
-
-# Define UI for application that draws a histogram
+# UI dynamic based on server side
 ui <- page_fillable(uiOutput("dynamic_Ui"))
 
 
-# Define server logic required to draw a histogram
+# Define server logic 
 server <- function(input, output,session) {
   
   
-  
+  # this is reactive storing group for legend click
   selected_group <- reactiveVal(NULL)
   
   last_click <- reactiveVal(NULL)
   
+  # reactive storing cell line for specific graph dynamic
   Specific_cell=reactiveVal(NULL)
   
+  
+  #dummmy reactive to force server side updates to fix UI between UI switching
   ui_refresh <- reactiveVal(0)
   
+  # when specific cell changes (causing UI change), force refresh causing renderplotly to reset
   observeEvent(Specific_cell(), {
     ui_refresh(ui_refresh() + 1)
   })
   
+  #resets dummy reactive when going back to main menu
+  #when cell line is null goes to main menu but when there is a value it switches to specific graph view
   
   output$dynamic_Ui <- renderUI({
     
@@ -117,9 +131,6 @@ server <- function(input, output,session) {
     }
   })
   
-  output$cell_name=renderUI({
-    headerPanel(Specific_cell())
-  })
   # this is a reactive for PCA which specifies which assay would be used depending on the radio button
   PCA_value <- reactiveVal(NULL)
   
@@ -129,7 +140,9 @@ server <- function(input, output,session) {
   
     
 
-#This checks if its virus or vector   
+#This checks if its virus or vector and updates all UI and reactive values associated, including viral or vector PCA data (individual and variable)
+#resets UI for bins and switches 
+
     assay_obs_virus= observe({
       req(input$assay, input$bins)
       if (input$assay=="virus"){
@@ -141,7 +154,7 @@ server <- function(input, output,session) {
         PCA_value(ind_coord_virus)
         contr_df(as.data.frame(res_var_virus$coord))
         selected_group(NULL)
-        assay_obs_virus$suspend()
+        assay_obs_virus$suspend() #have two observes that checks virus or vector and both switch the other on or off to prevent constant observing 
         assay_obs_vector$resume()
     }})
     
@@ -160,6 +173,7 @@ server <- function(input, output,session) {
         assay_obs_virus$resume()
       }})
     
+    #update clustering based on user input
     observeEvent(input$bins,{
       if (input$assay=="vector"){
       clusters <- kmeans(ind_coord[, c("Dim.1", "Dim.2")], centers = input$bins)
@@ -188,6 +202,7 @@ server <- function(input, output,session) {
         xlab("PC1")+
         ylab("PC2")
       
+      #for legend click , if clicked display all names for cell lines in selected group
       if (!is.null(selected_group())){
         PCA_obj=PCA_obj+
         geom_text(aes(label=ifelse(group==selected_group(),row.names(df),'')))
@@ -196,12 +211,13 @@ server <- function(input, output,session) {
      
        p=ggplotly(PCA_obj,source = "PCA",tooltip = "text")%>%
          event_register(event = "plotly_legendclick")%>%
-         event_register(event = "plotly_click")%>%
+         event_register(event = "plotly_click")%>% #registerging clicks
         layout(legend = list(itemclick = F,itemdoubleclick = F))
        
        
        
-       
+       # this is for variable direction overlay
+       # have to first plot the arrow itself 
        if (input$contributions){
          df=contr_df()
          for (i in 1:nrow(df)){
@@ -224,6 +240,7 @@ server <- function(input, output,session) {
          )
          ))
          
+        # now plotting text for the arrow, have to do it separate due to formatting text
          
       p=p%>%layout(annotations=list(
         list( 
@@ -243,6 +260,7 @@ server <- function(input, output,session) {
     p
     })
     
+    #box plots for specific, graphs calculated beforehand (not in server side), and reacive containing cell name used to index 
     output$Box_plot = renderPlotly({
       req(Specific_cell())
         box_plot_vector[[Specific_cell()]]
@@ -256,12 +274,13 @@ server <- function(input, output,session) {
       
     })
     
-    
+    # logarithmic plots for specific
     output$logarithmic_plot = renderPlotly({
       req(Specific_cell())
         logarithmic_plot_vector[[Specific_cell()]]
 
     })
+    
     
     output$logarithmic_plot_virus = renderPlotly({
       req(Specific_cell())
@@ -270,7 +289,7 @@ server <- function(input, output,session) {
       
     })
     
-    
+    # logistic plots for specific
     output$logistic_plot = renderPlotly({
       req(Specific_cell())
         logistic_plot_vector[[Specific_cell()]]
@@ -283,6 +302,7 @@ server <- function(input, output,session) {
 
     })
     
+    #here is legend click observe,grabs plotly event data and uses it. Reclick of same value would cause reactive to be set to null (unselecting)
     
     observeEvent(event_data("plotly_legendclick",source = "PCA",priority = "event"),{
       ed=event_data("plotly_legendclick",source = "PCA")
@@ -295,6 +315,9 @@ server <- function(input, output,session) {
       selected_group(as.integer(ed[[1]]["legendgroup"]) )
       }
     })
+    
+    #plotly click logic- matches plotly coordinates with PCA data to get cell name and stores in reactive
+    #to call in graphs
     
     observeEvent(event_data("plotly_click",source = "PCA",priority = "event"),{
       ed2=event_data("plotly_click",source = "PCA")
@@ -313,6 +336,7 @@ server <- function(input, output,session) {
       Specific_cell(cell_key$cell_line)
     })
   
+  # logic for reset button
     observeEvent(input$reset,{
       selected_group(NULL)
       Specific_cell(NULL)
