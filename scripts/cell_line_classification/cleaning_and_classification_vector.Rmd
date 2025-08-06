@@ -54,8 +54,9 @@ need to clean data, cleaning up NAs and empty rows in the original dataset, only
 
 ```{r}
 HIV1_vector_data=HIV1_vector_data[,c(2,5,6,7:13,15)]
-HIV1_vector_data=na.omit(HIV1_vector_data)
 
+HIV1_vector_data=na.omit(HIV1_vector_data)
+HIV1_vector_data=HIV1_vector_data%>%mutate(cell_line=if_else(cell_line=="Blix_1","Bilx_1",HIV1_vector_data$cell_line))
 ```
 
 here we get rid of reduced values, this normally represents dying cells which is irrelevant to our analysis. in this code if a data point with a higher volume within a replicate is less than 80% of the max for that replicate it is replaced with the maximum. This practically means that as the graph increases it plateaus at the max instead of decreasing
@@ -75,6 +76,7 @@ vector_data_per_cell_line=HIV1_vector_data%>%nest_by(cell_line,.keep = T)
 
 this points all plots by titre amount and separated by screen, allows you to see general shape of data, separated by
 
+
 ```{r}
 apply_plot=function(i){ggplot(data = i,aes(x=infection_volume_ul,y=assay_output,group = interaction(screen,replicate) ))+
   geom_point()+
@@ -85,7 +87,7 @@ apply_plot=function(i){ggplot(data = i,aes(x=infection_volume_ul,y=assay_output,
 
 ```{r scatter_plot}
 scatter_plot_vector=purrr::map(vector_data_per_cell_line$data,apply_plot)
-#names(scatter_plot_vector)=vector_data_per_cell_line$cell_line
+names(scatter_plot_vector)=vector_data_per_cell_line$cell_line
 scatter_plot_vector
 ```
 
@@ -354,7 +356,7 @@ logistic_fit <- function(data) {
         group_by(screen_nb,replicate) %>%  # Verify these columns exist in your data
         group_modify(~ {
             tryCatch({ # Fit with drm, explicitly stating NO log transformation
-                model <- drm(zscore ~ infection_volume_ul, fct = L.4(),lowerl = c(-Inf, min(.x$zscore), -Inf, -Inf), data = .x,control = drmc(relTol = 1e-06,method = "CG"))
+                model <- drm(zscore ~ infection_volume_ul, fct = L.4(),lowerl = c(-Inf, min(.x$zscore), -Inf, -Inf), data = .x,control = drmc(method = "CG"))
                 coefs <- coef(model)
 
                 .x %>%
@@ -456,7 +458,7 @@ for (i in vector_data_per_cell_line[2][[1]]){
                                      group_by(screen_nb,replicate)%>%
                                      mutate(max_zscore=max(zscore))%>%
                                      ungroup()%>%
-                                     summarise(
+                                     reframe(
                                        cell_line=cell_line,
                                        mean_max_zscore=mean(max_zscore),
                                        SD_max_zscore=sd(max_zscore),
@@ -486,7 +488,7 @@ HIV1_vector_data=vector_data_per_cell_line%>%unnest()
 
 HIV1_vector_data_mean=HIV1_vector_data%>%
   group_by(batch,cell_line,screen,screen_nb,titre,infection_volume_ul)%>%
-  summarise(assay_output=mean(assay_output),
+  reframe(assay_output=mean(assay_output),
             zscore=mean(zscore),
             a_log=mean(a),
             b_log=mean(b),
@@ -495,8 +497,7 @@ HIV1_vector_data_mean=HIV1_vector_data%>%
             logis_d=mean(logis_d),
             logis_c=mean(logis_c),
             logis_e=mean(logis_e),
-            area_under_curve=mean(area_under_curve))%>%
-  ungroup()
+            area_under_curve=mean(area_under_curve))
 
 HIV1_vector_data_mean <- HIV1_vector_data_mean %>%
   mutate(across(c(zscore, a_log, b_log,#c_log, 
@@ -509,7 +510,7 @@ i then create a dataframe containing the parameter information for each cell scr
 ```{r}
 HIV1_vector_data_PCA=unique(HIV1_vector_data_mean%>%
                               group_by(cell_line,screen_nb)%>%
-                              summarise(assay_output=max(zscore),
+                              reframe(assay_output=max(zscore),
                                         a_log=a_log,
                                         b_log=(b_log),
                                         #c_log=c_log,
@@ -526,7 +527,7 @@ Then averaging between screens,so i get a dataframe with each cell line by itsel
 
 HIV1_vector_data_PCA_sum <- HIV1_vector_data_PCA %>%
   group_by(cell_line) %>%
-  summarise(
+  reframe(
     assay_output      = mean(assay_output, na.rm = TRUE),
     a_log             = mean(a_log, na.rm = TRUE),
     b_log             = mean(b_log, na.rm = TRUE),
@@ -628,7 +629,7 @@ In this snippet i get rid of positive and negative controls for dataset as it wo
 I then plot a graph showing how data is organised only on the PC with the highest percentage of variance (PC1), this gives me a linear graph of points. I added jitter to make the points more readable but the y axis in the graph doesn't represent anything at all
 
 ```{r PCA dim 1}
-
+res_var=get_pca_var(PCA)
 res.ind <- get_pca_ind(PCA)
 dim(res.ind$coord)
 ind_coord <- as.data.frame(res.ind$coord)
@@ -675,6 +676,7 @@ PCA_classification=ggplot(data = ind_coord,aes(x=Dim.1,y = Dim.2,label=row.names
   theme_classic()+
   xlab("PC1")+
   ylab("PC2")
+  
 
 
 
@@ -892,11 +894,10 @@ write_delim(x = export_list_for_plink,file = "../../inputs/plink_vector_phenotyp
 export using susceptible,resistant
 ```{r}
 phenotype_vector_susceptible=data.frame("IID"=toupper(row.names(susceptible_vector_clusters)),"Phenotype"=2)
-phenotype_vector_resistant=data.frame("IID"=toupper(row.names(resistant_vector_clusters)),"phenotype"=1)
+phenotype_vector_resistant=data.frame("IID"=toupper(row.names(resistant_vector_clusters)),"Phenotype"=1)
 
 phenotype_vector=rbind(phenotype_vector_susceptible,phenotype_vector_resistant)
 
-write_delim(x = phenotype_vector,file = "../../inputs/vector_phenotype.txt",delim = "\t")
 
 ```
 

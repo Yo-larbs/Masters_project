@@ -22,8 +22,6 @@ library(data.table)
 library(readr)
 library(pheatmap)
 library(gprofiler2)
-library(clusterProfiler)
-library(org.Hs.eg.db)
 
 
 ```
@@ -42,39 +40,29 @@ total_Regenie_vector=total_Regenie_vector%>%dplyr::select(!c(EXTRA)) %>%
 ```
 
 ```{r}
-total_Regenie_vector_lambda <- total_Regenie_vector %>%
-  mutate(
-    CHI2 = qchisq(1 - P, df = 1)
-  )
-
-lambda <- median(total_Regenie_vector_lambda$CHI2, na.rm = TRUE) / qchisq(0.5, df = 1)
-print(lambda)
-```
-
-
-```{r}
 total_Regenie_vector = total_Regenie_vector %>% mutate(
     # detect pure insertions (REF is single base, ALT starts with that base)
-    is_ins = nchar(ALT) > nchar(REF) & nchar(REF) == 1 & str_sub(ALT, 1, 1) == REF,
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
     # detect pure deletions (ALT is single base, REF starts with that base)
-    is_del = nchar(REF) > nchar(ALT) & nchar(ALT) == 1 & str_sub(REF, 1, 1) == ALT,
-    # shift POS only for single-base deletions (REF length exactly 2 here)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
     POS2 = case_when(
-      is_del & (nchar(REF) - nchar(ALT) == 1) ~ POS + 1L,
-      TRUE                                    ~ POS
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
     ),
     # strip off the anchor base in the sequences
     REF2 = case_when(
       is_ins ~ "-",                      # insertion → anchor stripped
-      is_del ~ str_sub(REF, 2),         # delete the first base
+      is_del ~ str_sub(REF, 2),          # delete the first base
       TRUE   ~ REF
     ),
     ALT2 = case_when(
       is_ins ~ str_sub(ALT, 2),          # drop the first base
       is_del ~ "-",                      # deletion → anchor stripped
       TRUE   ~ ALT
-    )
-  )  %>% 
+    ) 
+  ) %>% 
   dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
   dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
 ```
@@ -106,7 +94,7 @@ pheno_vector=read_tsv('../../inputs/VCF/plink_vector_phenotype.txt')
 ```{r}
 plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ALT=='*'),]
 
-plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ExonicFunc.ensGene49=='synonymous SNV'|plink_total_annovar_vector$ExonicFunc.ensGene49=='unknown'),]
+plink_total_annovar_vector=plink_total_annovar_vector[!(plink_total_annovar_vector$ExonicFunc.ensGene49=='synonymous SNV'),]
 
 plink_total_annovar_vector=plink_total_annovar_vector[(plink_total_annovar_vector$Func.ensGene49=='exonic'|plink_total_annovar_vector$Func.ensGene49=='ncRNA_exonic'|plink_total_annovar_vector$Func.ensGene49=='exonic;splicing'|plink_total_annovar_vector$Func.ensGene49=='splicing'|plink_total_annovar_vector$Func.ensGene49=='ncRNA_exonic;splicing'|plink_total_annovar_vector$Func.ensGene49=='splicing'),]
 
@@ -114,20 +102,21 @@ plink_total_annovar_vector=plink_total_annovar_vector[(plink_total_annovar_vecto
 
 ```{r}
 genos_vector2 <- genos_vector_wide %>% 
-   mutate(
+  mutate(
     # detect pure insertions (REF is single base, ALT starts with that base)
-    is_ins = nchar(ALT) > nchar(REF) & nchar(REF) == 1 & str_sub(ALT, 1, 1) == REF,
+    is_ins = nchar(ALT) > nchar(REF) & nchar(REF)==1 & str_sub(ALT,1,1)==REF,
     # detect pure deletions (ALT is single base, REF starts with that base)
-    is_del = nchar(REF) > nchar(ALT) & nchar(ALT) == 1 & str_sub(REF, 1, 1) == ALT,
-    # shift POS only for single-base deletions (REF length exactly 2 here)
+    is_del = nchar(REF) > nchar(ALT) & nchar(ALT)==1 & str_sub(REF,1,1)==ALT,
+    # shift POS for those events
     POS2 = case_when(
-      is_del & (nchar(REF) - nchar(ALT) == 1) ~ POS + 1L,
-      TRUE                                    ~ POS
+      is_ins ~ POS + 1L,
+      is_del ~ POS + 1L,
+      TRUE   ~ POS
     ),
     # strip off the anchor base in the sequences
     REF2 = case_when(
       is_ins ~ "-",                      # insertion → anchor stripped
-      is_del ~ str_sub(REF, 2),         # delete the first base
+      is_del ~ str_sub(REF, 2),          # delete the first base
       TRUE   ~ REF
     ),
     ALT2 = case_when(
@@ -135,7 +124,7 @@ genos_vector2 <- genos_vector_wide %>%
       is_del ~ "-",                      # deletion → anchor stripped
       TRUE   ~ ALT
     )
-  )  %>% 
+  ) %>% 
   dplyr::select(-POS,-REF,-ALT,-is_ins,-is_del) %>% 
   dplyr::rename(POS=POS2, REF=REF2, ALT=ALT2)
 ```
@@ -191,8 +180,8 @@ Regenie_vector_for_Manhattan$CHROM= as.numeric(Regenie_vector_for_Manhattan$CHRO
 
 Regenie_vector_for_Manhattan=Regenie_vector_for_Manhattan[!is.na(Regenie_vector_for_Manhattan$CHROM),]
 
-bmp("Regenie_manhattan_plot.bmp", width = 3200, height = 1600,res = 300 )
-manhattan(Regenie_vector_for_Manhattan,chr = "CHROM",bp = "POS",snp ="ID",p = "P" ,col = c("red3","lightblue","orange4","purple","pink","tan","maroon","black","grey44","turquoise","blue","orange","magenta","brown4","gold","purple4","lightblue4","yellow","navy","grey70","khaki3"),chrlabs = c(1:22),annotatePval = 0.0005,annotateTop = T,suggestiveline = T,highlight = overlapping_variants_regenie$ID,)
+png("Regenie_manhattan_plot.png", width = 3200, height = 1600,res = 300 )
+manhattan(Regenie_vector_for_Manhattan,chr = "CHROM",bp = "POS",snp ="ID",p = "P" ,col = c("red3","lightblue","yellow4","purple","pink","tan","maroon","black","grey44","turquoise","blue","orange","magenta","brown4","gold","purple4","lightblue4","yellow","green4","navy","grey70","lightgreen","khaki3"),chrlabs = c(1:22),annotatePval = 0.0005,annotateTop = F,suggestiveline = T,)
 dev.off()
 
 ```
@@ -221,9 +210,7 @@ Regenie_vector_full_analysis_df_deleterious <- Regenie_vector_full_analysis_df[
     "frameshift deletion",
     "frameshift insertion",
     "nonframeshift deletion",
-    "nonframeshift insertion",
-    "frameshift subsitution",
-    "nonframeshift substitution"
+    "nonframeshift insertion"
   ),
 ]
 ```
@@ -366,7 +353,7 @@ Regenie_vector_high_chance <- Regenie_vector_full_analysis_df_deleterious %>%
     (Polyphen2_HDIV_pred == "D" & PROVEAN_pred == "D")|
       (SIFT4G_pred=="."|PROVEAN_pred == "."|Polyphen2_HDIV_pred=="."),
     P                < 0.01,
-    gnomad41_exome_AF <= 0.05|gnomad41_exome_AF=="."
+    gnomad41_exome_AF <= 0.01
   )
 
 ```
@@ -452,7 +439,8 @@ dotplot(ekegg_significant, showCategory=20) + ggtitle("KEGG pathway enrichment r
 dev.off
 ```
 
-##significant deleterious and rare \### 1% allele frequency <0.01
+##significant deleterious and rare \### 1% allele frequency
+
 
 protective: GDF7,MERTK,MERTK,ENSG00000293268,SLC49A3,TUBB8,MUC6,MUC6,ARFGAP2,OR5L1,LRCOL1,GOLGA8K,ENSG00000293570
 
@@ -464,85 +452,13 @@ protective: NBPF14,GDF7,RGPD3,MERTK,MERTK,ENSG00000293268,MUC4,SLC49A3,OR2B2,CLD
 
 ## most significatn (may be deleterious)\<0.0005 P
 
-MERTK MERTK CAPN11 MUC12" "KCP"\
+EDARADD MERTK MERTK CAPN11 MUC12" "KCP"\
 PRUNE2 SLCO1B "FBXO39,ACSF2,SLC36A3,CES1,KIF26B,MYOCD,FNBP4,ATP2A3
 
 ## very significant (not deleterious ?)
 
-"TTLL10","KIF26B","NCOA1","MERTK","ZNF501","MUC4",
-"SLC49A3","C4orf17","DCHS2","C6","ENSG00000250138" "SLC36A3","CAPN11" ,"KCP","AGBL2","FNBP4","NUP160","OR5G3","FAU","SLCO1B1","GLT8D2"          "GOLGA8T","GOLGA8K","CES1","CTC1","MYOCD","ACSF2","QRICH2" ,"TDRD12","FAM246C" ,BHLHE22  
+CAPN11,DCHS2,QRICH2,KRTAP10,TTLL10,CES1
 
-## most rare (p\<0.005)
+## most rare (p\<0.05)
 
 MTCH2,MUC12
-
-#overlapping with plink
-MERTK,SLC49A3,MUC6,ARFGAP2,EDARADD,HACL1,MALRD1,MS4A5,MCF2L,KCP,RECQL4,POLR3A,MTCH2,SYTL2,RAB21,MYOCD,TTLL10,PRUNE2,FBXO39,CES1,ATP2A3 
-
-
-
-```{r}
-overlapping_list=c("NBPF14","GDF7","RGPD3","MERTK","MERTK","ENSG00000293268","MUC4","SLC49A3","OR2B2","CLDN20","KCP","RECQL4","TUBB8","POLR3A","MUC6","OTOG","ARFGAP2","SYTL2","RAB21","LRCOL1","HEATR5A","GOLGA6L7","GOLGA8K","MYOCD","ENSG00000293570","DHX34","EMID1","EDARADD","HACL1","PRPS1L1","MALRD1","MS4A5","TMEM223","C1QTNF9B","MCF2L","ZNF530","TTLL10","KIF26B","NCOA1","MERTK","ZNF501","MUC4","SLC49A3","C4orf17","DCHS2","C6","ENSG00000250138","SLC36A3","CAPN11" ,"KCP","AGBL2","FNBP4","NUP160","OR5G3","FAU","SLCO1B1","GLT8D2","GOLGA8T","GOLGA8K","CES1","CTC1","MYOCD","ACSF2","QRICH2" ,"TDRD12","FAM246C","DNLZ","BHLHE22"
-)
-
-overlaps_regenie=Regenie_vector_full_analysis_df[Regenie_vector_full_analysis_df$Gene.ensGene49%in%overlapping_list&Regenie_vector_full_analysis_df$P<0.01]
-```
-
-
-```{r}
-overlapping_variants_regenie=overlaps_regenie[overlaps_regenie$ID%in%overlaps_plink$ID,]
-```
-
-```{r}
-overlapping_variants_regenie <- overlapping_variants_regenie %>%
-  filter(
-    (
-      (SIFT4G_pred == "D" & Polyphen2_HDIV_pred == "D") |
-      (PROVEAN_pred == "D" & SIFT4G_pred == "D") |
-      (Polyphen2_HDIV_pred == "D" & PROVEAN_pred == "D") |
-      (
-        (SIFT4G_pred == "." | PROVEAN_pred == "." | Polyphen2_HDIV_pred == ".") &  ExonicFunc.ensGene49 != "nonsynonymous SNV"
-      ) |
-      P < 0.0005
-    ) &
-    gnomad41_exome_AF < 0.5|gnomad41_exome_AF=="."
-  )
-  
-
-
-
-```
-
-`
-```{r}
-overlapping_variants_regenie=overlapping_variants_regenie[overlapping_variants_regenie$ID%in%overlapping_variants_plink2$ID,]
-```
-
-
-```{r GO_very_significant resistant}
-entrez_significant <- bitr(overlapping_variants_regenie$Gene.ensGene49,
-               fromType="SYMBOL", toType="ENTREZID",
-               OrgDb=org.Hs.eg.db)
-
-# 2) GO Biological Process
-ego_significant <- enrichGO(gene         = entrez_significant$ENTREZID,
-                OrgDb        = org.Hs.eg.db,
-                ont          = "BP",
-                pvalueCutoff = 0.05,
-                readable     = TRUE)
-
-#png("GO_resistant.png", width = 2400, height = 1200,res = 300)
-dotplot(ego_significant) + ggtitle("GO:BP enrichment resistant")
-#dev.off()
-```
-```{r Kegg_dotplot}
-# 3) KEGG
-ekegg <- enrichKEGG(gene         = entrez_significant$ENTREZID,
-              
-               
-                    organism     = 'hsa',
-                    pvalueCutoff = 0.05)
-#png("general_Ekegg.png", width = 1600, height = 1200,res = 300)
-dotplot(ekegg, showCategory=20) + ggtitle("KEGG pathway enrichment")
-#dev.off()
-```

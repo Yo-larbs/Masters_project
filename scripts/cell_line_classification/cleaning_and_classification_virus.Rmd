@@ -46,6 +46,7 @@ after we load in the csv we clean all the NA and remove the unneeded columns(con
 ```{r}
 HIV1_virus_data=HIV1_virus_data[,c(2,6:9,11:15,17)]
 HIV1_virus_data=na.omit(HIV1_virus_data)
+HIV1_virus_data=HIV1_virus_data%>%mutate(cell_line=if_else(cell_line=="Blix_1","Bilx_1",HIV1_virus_data$cell_line))
 
 ```
 
@@ -130,7 +131,7 @@ dev.off()
 okay going to apply zscore to all values to standardise between, going to add 1.5 to make sure none are negative (so that logarithmic can be applied to it)
 
 ```{r}
-#HIV_virus_group_data = HIV1_virus_data%>%summarise(mean_output=mean(assay_output),sd_output=sd(assay_output))
+
 HIV1_virus_data=HIV1_virus_data%>%
   group_by(screen_nb)%>%
   mutate(zscore=((((assay_output-mean(assay_output))/sd(assay_output)))))%>%
@@ -357,7 +358,7 @@ logistic_fit <- function(data) {
         group_by(screen_nb,replicate) %>% 
         group_modify(~ {
             tryCatch({ 
-                model <- drm(zscore ~ infection_volume_ul, fct = L.4(),lowerl = c(-Inf, min(.x$zscore), -Inf, -Inf), data = .x)
+                model <- drm(zscore ~ infection_volume_ul, fct = L.4(), data = .x)
                 coefs <- coef(model)
 
                 .x %>%
@@ -457,7 +458,7 @@ for (i in virus_data_per_cell_line[2][[1]]){
   SD_table=rbind(SD_table,distinct(i%>%group_by(screen_nb,replicate)%>% 
                                      mutate(max_zscore=max(zscore))%>%
                                      ungroup()%>%
-                                     summarise(
+                                     reframe(
                                        cell_line=cell_line,
                                        mean_max_zscore=mean(max_zscore),
                                        SD_max_zscore=sd(max_zscore),
@@ -483,7 +484,7 @@ I now unnest from the cell line dataframe list to get a dataframe containing all
 HIV1_virus_data=bind_rows(virus_data_per_cell_line)%>%unnest()
 
 HIV1_virus_data_mean=HIV1_virus_data%>%group_by(batch,cell_line,screen,screen_nb,titre,infection_volume_ul)%>%
-  summarise(assay_output=mean(assay_output),
+  reframe(assay_output=mean(assay_output),
             zscore=mean(zscore),
             a_log=mean(a),
             b_log=mean(b),
@@ -491,8 +492,7 @@ HIV1_virus_data_mean=HIV1_virus_data%>%group_by(batch,cell_line,screen,screen_nb
             logis_d=mean(logis_d),
             logis_c=mean(logis_c),
             logis_e=mean(logis_e),
-            area_under_curve=mean(area_under_curve))%>%
-  ungroup()
+            area_under_curve=mean(area_under_curve))
 
 HIV1_virus_data_mean <- HIV1_virus_data_mean %>%
   mutate(across(c(zscore,
@@ -510,7 +510,7 @@ In this i only take the max zscore(as thats what the parameter is) so i get rid 
 
 ```{r}
 HIV1_virus_data_PCA=unique(HIV1_virus_data_mean%>%group_by(cell_line,screen_nb)%>%
-                             summarise(assay_output=max(zscore),
+                             reframe(assay_output=max(zscore),
                                        a_log=a_log,
                                        b_log=(b_log),
                                        logis_b=logis_b,
@@ -526,7 +526,7 @@ Here i take only the parameters that are actually going to be used in my analysi
 
 HIV1_virus_data_PCA_sum <- HIV1_virus_data_PCA %>%
   group_by(cell_line) %>%
-  summarise(
+  reframe(
     assay_output      = mean(assay_output, na.rm = TRUE),
     a_log             = mean(a_log, na.rm = TRUE),
     b_log             = mean(b_log, na.rm = TRUE),
@@ -602,9 +602,9 @@ contributions_PCA=fviz_pca_var(PCA,
              col.var = "contrib", # Color by contributions to the PC
              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
              repel = TRUE ) 
-bmp("contributions_PCA_virus.bmp",width = 3200,height = 2400,res = 500)
+#bmp("contributions_PCA_virus.bmp",width = 3200,height = 2400,res = 500)
 contributions_PCA
-dev.off()
+#dev.off()
 ```
 
 Overlays data points with the parameters to see how each datapiont is in parameter and can see which parameters are causing the split
@@ -622,16 +622,17 @@ In this snippet i get rid of positive and negative controls for dataset as it wo
 I then plot a graph showing how data is organised only on the PC with the highest percentage of variance (PC1), this gives me a linear graph of points. I added jitter to make the points more readable but the y axis in the graph doesn't represent anything at all
 
 ```{r PCA dim 1}
+res_var_virus=get_pca_var(PCA)
 res.ind <- get_pca_ind(PCA)
 dim(res.ind$coord)
-ind_coord <- as.data.frame(res.ind$coord)
-ind_coord=ind_coord[-which(row.names(ind_coord)==('TZM')|row.names(ind_coord)=='CTR_M2_O5'|row.names(ind_coord)=='CTR_M2_O5_21'),]
+ind_coord_virus <- as.data.frame(res.ind$coord)
+ind_coord_virus=ind_coord_virus[-which(row.names(ind_coord_virus)==('TZM')|row.names(ind_coord_virus)=='CTR_M2_O5'|row.names(ind_coord_virus)=='CTR_M2_O5_21'),]
 res.ind$cos2=res.ind$cos2[-which(row.names(res.ind$cos2)==('TZM')|row.names(res.ind$cos2)=='CTR_M2_O5'|row.names(res.ind$cos2)=='CTR_M2_O5_21'),]
 
 
-PCA_dim1=ggplot(data = ind_coord,aes(x=Dim.1,y = 0,label=row.names(ind_coord)))+
+PCA_dim1=ggplot(data = ind_coord_virus,aes(x=Dim.1,y = 0,label=row.names(ind_coord_virus)))+
   geom_point(size = 3,aes(colour = res.ind$cos2[,1]), position = position_jitter(height = 0.02,width = 0),)+
-  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord),'')),max.overlaps = 150)+
+  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord_virus),'')),max.overlaps = 150)+
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray")+
   theme_minimal() +
   xlab("PC1")+
@@ -652,34 +653,36 @@ PCA_dim1
 I also plot the points with k means clustering alogirthm, and i label based on the top quantiles for my Dim.1 , i save the top and bottom 10% to their own dataframes for storage
 
 ```{r PCA classification}
-susceptible_virus_cell=ind_coord[(ind_coord$Dim.1 < quantile(ind_coord$Dim.1, 0.1)),]
-Resistant_virus_cell=ind_coord[(ind_coord$Dim.1 > quantile(ind_coord$Dim.1, 0.9)),]
+susceptible_virus_cell=ind_coord_virus[(ind_coord_virus$Dim.1 < quantile(ind_coord_virus$Dim.1, 0.1)),]
+Resistant_virus_cell=ind_coord_virus[(ind_coord_virus$Dim.1 > quantile(ind_coord_virus$Dim.1, 0.9)),]
 
+HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
+HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(Resistant_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
 
 
 set.seed(39)
-clusters <- kmeans(ind_coord[, c("Dim.1", "Dim.2")], centers = 10)
+clusters <- kmeans(ind_coord_virus[, c("Dim.1", "Dim.2")], centers = 10)
 
 
-ind_coord$group <- as.factor(clusters$cluster)
-ind_coord$pc_combined=0.80*ind_coord$Dim.1 + 0.20*ind_coord$Dim.2
+ind_coord_virus$group <- as.factor(clusters$cluster)
+ind_coord_virus$pc_combined=0.80*ind_coord_virus$Dim.1 + 0.20*ind_coord_virus$Dim.2
 
-PCA_classification=ggplot(data = ind_coord,aes(x=Dim.1,y = Dim.2,label=row.names(ind_coord)))+
+PCA_classification=ggplot(data = ind_coord_virus,aes(x=Dim.1,y = Dim.2,label=row.names(ind_coord_virus)))+
   geom_point(size = 3,aes(colour = group))+
-  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord),'')),max.overlaps = 150)+
+  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord_virus),'')),max.overlaps = 150)+
   xlab("PC1")+
   ylab("PC2")+
   theme_classic()
 
 
-susceptible_virus_cell=ind_coord[(ind_coord$pc_combined < quantile(ind_coord$pc_combined, 0.1)),]
-Resistant_virus_cell=ind_coord[(ind_coord$pc_combined > quantile(ind_coord$pc_combined, 0.9)),]
+susceptible_virus_cell=ind_coord_virus[(ind_coord_virus$pc_combined < quantile(ind_coord_virus$pc_combined, 0.1)),]
+Resistant_virus_cell=ind_coord_virus[(ind_coord_virus$pc_combined > quantile(ind_coord_virus$pc_combined, 0.9)),]
 
 
 
-bmp("PCA_classification.bmp",width = 3200,height = 2400,res = 500)
+#bmp("PCA_classification.bmp",width = 3200,height = 2400,res = 500)
 PCA_classification
-dev.off()
+#dev.off()
 
 HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_virus_data_susceptible)) %>%
   mutate(phenotype = ifelse(row.names(.) %in% row.names(HIV_virus_data_resistant),
@@ -690,8 +693,8 @@ HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_vir
 here i create the classification based on the clusters, i set the clusters and choose the most extreme groups, NOTE- k means code changes every time so i set the seed. if the seed is changed this code would have to be changed also
 
 ```{r}
-susceptible_virus_clusters=ind_coord[(ind_coord$group==9)|(ind_coord$group==5),]
-resistant_virus_clusters=ind_coord[(ind_coord$group==8),]#|(ind_coord$group==6),]
+susceptible_virus_clusters=ind_coord_virus[(ind_coord_virus$group==9)|(ind_coord_virus$group==5),]
+resistant_virus_clusters=ind_coord_virus[(ind_coord_virus$group==8),]#|(ind_coord_virus$group==6),]
 
 HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
 HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(resistant_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
@@ -827,7 +830,7 @@ common_virus_list=unique(most_common_virus)
 here i export the quantitative and qualitative files quantitative of all cells and PC1 and then qualitative of the extremes with resistant/susceptible for phenotype
 
 ```{r}
-export_list_for_plink=ind_coord[,c(1,2)]
+export_list_for_plink=ind_coord_virus[,c(1,2)]
 export_list_for_plink$cell_line=row.names(export_list_for_plink)
 export_list_for_plink=export_list_for_plink[,c(3,1)]
 write_delim(x = export_list_for_plink,file = "plink_virus_phenotype.txt",delim = "\t")
@@ -836,7 +839,7 @@ write_delim(x = export_list_for_plink,file = "plink_virus_phenotype.txt",delim =
 
 ```{r}
 phenotype_virus_susceptible=data.frame("IID"=toupper(row.names(susceptible_virus_clusters)),"Phenotype"=2)
-phenotype_virus_resistant=data.frame("IID"=toupper(row.names(resistant_virus_clusters)),"phenotype"=1)
+phenotype_virus_resistant=data.frame("IID"=toupper(row.names(resistant_virus_clusters)),"Phenotype"=1)
 
 phenotype_virus=rbind(phenotype_virus_susceptible,phenotype_virus_resistant)
 
