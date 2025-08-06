@@ -272,7 +272,6 @@ Resistant_virus_cells_annovar_csv=distinct(Resistant_virus_cells_annovar_csv)
 Susceptible_virus_cells_annovar_csv=distinct(Susceptible_virus_cells_annovar_csv14)
 ```
 
-
 ## filtering out the annovar output
 
 First we need to only keep the exonic, Pretty much every variant should already by exonic but just to make sure, We also take out the Synonymous SNV and those listed as unknown
@@ -577,3 +576,9 @@ Resistant_virus_cells_annovar_csv_deleterious[Resistant_virus_cells_annovar_csv_
 ```
 
 Potentially interesting genes for resistance HLA, ALPK2, XIRP2, NRAP, KIR2DL1, AKAP6,CROCC potentially interesting genes for Susceptibility TEP1 CSMD1
+
+```{r}
+library(bslib)
+```
+
+
