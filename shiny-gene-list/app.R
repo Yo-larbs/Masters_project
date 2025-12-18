@@ -6,7 +6,7 @@
 #
 #    https://shiny.posit.co/
 #
-install.packages("shinythemes")
+#install.packages("shinythemes")
 library(shiny)
 library(shinydashboard)
 library(bslib)
@@ -16,11 +16,11 @@ library(plotly)
 
 #this is used to grab code from R markdown for the  data used in this app, takes about 10-30 seconds to run, I recommend running it the first time opening app and then commenting it out
 #as long as data from the cleaning and classification files are in the environment app can run
- 
-#knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_vector.Rmd",output)
-#source(output)
-#knitr::purl("scripts/cell_line_classification/cleaning_and_classification_virus.Rmd",output)
-#source(output)
+
+#knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_vector.Rmd","cleaning_and_classification_vector.R")
+source("./cleaning_and_classification_vector.R")
+#knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_virus.Rmd","cleaning_and_classification_virus.R")
+source("./cleaning_and_classification_virus.R")
 
 
 
