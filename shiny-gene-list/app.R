@@ -6,7 +6,8 @@
 #
 #    https://shiny.posit.co/
 #
-#install.packages("shinythemes")
+install.packages("shinythemes")
+library(qs)
 library(shiny)
 library(shinydashboard)
 library(bslib)
@@ -14,19 +15,20 @@ library(shinythemes)
 library(plotly)
 #install.packages("htmlwidgets")
 
-#this is used to grab code from R markdown for the  data used in this app, takes about 10-30 seconds to run, I recommend running it the first time opening app and then commenting it out
-#as long as data from the cleaning and classification files are in the environment app can run
+#this is used to grab code from R markdown for the  data used in this app, takes up to a minute  to run, I recommend running it the first time opening app and then commenting it out
+#as long as data from the cleaning and classification files are in the environment, app can run and lines beginning with source can be commented out
+
 
 #knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_vector.Rmd","cleaning_and_classification_vector.R")
-source("./cleaning_and_classification_vector.R")
+#source("./cleaning_and_classification_vector.R")
 #knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_virus.Rmd","cleaning_and_classification_virus.R")
-source("./cleaning_and_classification_virus.R")
-
+#source("./cleaning_and_classification_virus.R")
 
 
 #this is the main menu UI, which would act as a default
 main_menu=(
-  
+  navset_tab(id = "assay_selection",
+  nav_panel("PCA",
   card(
     card_header("PCA Dashboard", 
                 tooltip(
@@ -45,15 +47,29 @@ main_menu=(
                      radioButtons("assay",label = "which assay?",choices = c("vector","virus"),selected = "vector"),
                      input_switch("contributions","overlay parameter contributions?",value = F)
                      ),
-                   card_body( plotlyOutput("PCA",height = "85vh",width = "100%",fill = T),fill = T
+                   card_body( plotlyOutput("PCA",height = "70vh",width = "100%",fill = T),fill = T
                    )
                    
                                  ),card_footer("designed by Yoofi Larbi",tooltip(
                                    bsicons::bs_icon("Exclamation-circle"),
                                    "Special thanks to Dr.Alessandra Vigilante and Dr. Luis Apolonia",
                                    placement = "right"
-                                 )))
-  )
+                                 )))),
+  nav_panel("WSS_plot",
+            card(card_header("WSS plot"),
+                 layout_sidebar(fillable = TRUE,
+                                sidebar = sidebar(
+                                  radioButtons("assay",label = "which assay?",choices = c("vector","virus"),selected = "vector"),
+                                  sliderInput("bins",label = "number of clusters:",min = 1,max = 50,value = 8)
+                                ),
+                                card_body(plotlyOutput("wss_plot",height = "70vh",width = "100%"),fill = T),
+                 ),
+                 
+                 
+                 )
+)
+))
+  
 
   
 
@@ -95,6 +111,7 @@ ui <- page_fillable(uiOutput("dynamic_Ui"))
 # Define server logic 
 server <- function(input, output,session) {
   
+
   
   # this is reactive storing group for legend click
   selected_group <- reactiveVal(NULL)
@@ -137,6 +154,7 @@ server <- function(input, output,session) {
   # this is for the overlay of the PCA contributions
   contr_df=reactiveVal(NULL)
   
+  WSS_plot_val <- reactiveVal(NULL)
   
     
 
@@ -152,6 +170,10 @@ server <- function(input, output,session) {
         clusters <- kmeans(ind_coord_virus[, c("Dim.1", "Dim.2")], centers = input$bins)
         ind_coord_virus$group <- as.factor(clusters$cluster)
         PCA_value(ind_coord_virus)
+        WSS_plot_val(HIV1_virus_data_PCA_1)
+        
+       
+        
         contr_df(as.data.frame(res_var_virus$coord))
         selected_group(NULL)
         assay_obs_virus$suspend() #have two observes that checks virus or vector and both switch the other on or off to prevent constant observing 
@@ -167,6 +189,7 @@ server <- function(input, output,session) {
         clusters <- kmeans(ind_coord[, c("Dim.1", "Dim.2")], centers = input$bins)
         selected_group(NULL)
         ind_coord$group <- as.factor(clusters$cluster)
+        WSS_plot_val(HIV1_vector_data_PCA_1)
         PCA_value(ind_coord)    
         contr_df(as.data.frame(res_var$coord))
         assay_obs_vector$suspend()
@@ -179,7 +202,8 @@ server <- function(input, output,session) {
       clusters <- kmeans(ind_coord[, c("Dim.1", "Dim.2")], centers = input$bins)
       selected_group(NULL)
       ind_coord$group <- as.factor(clusters$cluster)
-      PCA_value(ind_coord)    
+      
+      PCA_value(ind_coord)
     }
       else{
         clusters <- kmeans(ind_coord_virus[, c("Dim.1", "Dim.2")], centers = input$bins)
@@ -198,9 +222,16 @@ server <- function(input, output,session) {
         # generate bins based on input$bins from ui.R
       PCA_obj=ggplot(data = df,aes(x=Dim.1,y = Dim.2,label=row.names(df),text= paste("cell_line:",row.names(df),"<br>PC1:",signif(Dim.1,3),"<br>PC2:",signif(Dim.2,3))))+
         geom_point(size = 2,aes(colour = group))+
-        theme_classic()+
-        xlab("PC1")+
-        ylab("PC2")
+        theme_classic()
+      
+      if (input$assay =="vector"){
+      PCA_obj=PCA_obj+
+        xlab("PC1 (77%)")+
+        ylab("PC2 (16%)")}
+      else{
+        PCA_obj=PCA_obj+
+        xlab("PC1 (84%)")+
+        ylab("PC2 (14%)")}
       
       #for legend click , if clicked display all names for cell lines in selected group
       if (!is.null(selected_group())){
@@ -301,6 +332,48 @@ server <- function(input, output,session) {
       logistic_plot_virus[[Specific_cell()]]
 
     })
+    
+    output$wss_plot = renderPlotly({
+      req(WSS_plot_val,input$bins)
+      
+        dat <- as.data.frame(WSS_plot_val())
+        bins <- as.integer(input$bins)
+        if (bins < 1) return(NULL)
+        
+        mat <- as.matrix(dat)
+        n <- nrow(mat)
+        wss <- rep(NA_real_, bins)
+        
+        # first element: total within sum of squares for 1 cluster
+        wss[1] <- (n - 1) * sum(apply(mat, 2, var))
+        
+        # compute kmeans for 2..min(bins, n)
+        set.seed(1234)                # deterministic results
+        maxK <- min(bins, n)         # can't have more clusters than rows
+        for (i in 2:maxK) {
+          # nstart improves kmeans stability
+          km <- kmeans(mat, centers = i, nstart = 10)
+          wss[i] <- sum(km$withinss)
+        }
+        
+        # build data.frame for ggplot
+        df <- data.frame(cluster = seq_len(bins), wss = wss)
+        
+        # plot (points + line)
+        library(ggplot2)
+        ggplot(df, aes(x = cluster, y = wss)) +
+          geom_line() +
+          geom_point(size = 2) +
+          scale_x_continuous(breaks = seq_len(bins)) +
+          labs(
+            x = "Number of Clusters",
+            y = "Within groups sum of squares",
+            title = NULL
+          ) +
+          theme_minimal()
+      })
+      
+    
     
     #here is legend click observe,grabs plotly event data and uses it. Reclick of same value would cause reactive to be set to null (unselecting)
     

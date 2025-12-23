@@ -17,6 +17,8 @@ knitr::opts_chunk$set(
 #install.packages('ggrepel')
 #install.packages("minpack.lm")
 #install.packages("drc")
+#install.packages("dplyr")
+#install.packages("rstudioapi")
 library(tidyr)
 library(readr)
 library(dplyr)
@@ -26,11 +28,12 @@ library(ggrepel)
 library(minpack.lm)
 library(drc)
 library(factoextra)
-
+library(rstudioapi)
 
 ## --------------------------------------------------------------------------------------------------------
-setwd('~/Documents/Masters_project/')
-HIV1_virus_data=read_csv('inputs/Cleaning_and_classification/hiv1_virus_collated_n0_uncleaned(Sheet1).csv')
+current_path = rstudioapi::getActiveDocumentContext()$path
+setwd(dirname(current_path))
+HIV1_virus_data=read_csv('hiv1_virus_collated_n0_uncleaned(Sheet1).csv')
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -64,7 +67,7 @@ apply_plot=function(i){ggplot(data = i,aes(x=infection_volume_ul,y=assay_output,
 ## ----scatter plot----------------------------------------------------------------------------------------
 scatter_plot_virus=purrr::map(virus_data_per_cell_line$data,apply_plot)
 names(scatter_plot_virus)=virus_data_per_cell_line$cell_line
-scatter_plot_virus
+#scatter_plot_virus
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -81,23 +84,11 @@ apply_plot_boxplot=function(i){ggplot(data = i,aes(y=assay_output,x=titre,))+
 ## ----boxplot---------------------------------------------------------------------------------------------
 box_plot_virus=purrr::map(virus_data_per_cell_line$data,apply_plot_boxplot)
 names(box_plot_virus)=virus_data_per_cell_line$cell_line
-box_plot_virus
+#box_plot_virus
 
 
 ## --------------------------------------------------------------------------------------------------------
 class(HIV1_virus_data)
-
-
-## ----unnormalised_boxplot--------------------------------------------------------------------------------
-unnormalised_boxplot=ggplot(data = HIV1_virus_data,aes(y=assay_output, x=as.factor(screen_nb),group = screen_nb,))+
-  geom_boxplot()+
-  ggtitle('Before normalisation')+
-  xlab("Screen")+
-  ylab("Supernatant Gag")+
-  theme_classic()
-bmp("unnormalised_boxplot.bmp",width = 3200 ,height = 2400,res = 500,pointsize = 300)
-unnormalised_boxplot
-dev.off()
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -111,16 +102,6 @@ virus_data_per_cell_line=HIV1_virus_data%>%nest_by(cell_line,.keep = T)
 
 
 
-## ----normalised_boxplot----------------------------------------------------------------------------------
-normalised_boxplot=ggplot(data = HIV1_virus_data,aes(y=zscore, x=as.factor(screen_nb),group = screen_nb,))+
-  geom_boxplot()+
-  ggtitle('after normalisation')+
-  xlab("Screen")+
-  ylab("Zscore")+
-  theme_classic()
-bmp("normalised_boxplot.bmp",width = 3200 ,height = 2400,res = 500,pointsize = 300)
-normalised_boxplot
-dev.off()
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -148,29 +129,6 @@ HIV1_virus_data_outliers=bind_rows(all_outliers)%>%
 
 HIV1_virus_data=bind_rows(all_outliers)%>%group_by(cell_line,screen_nb,replicate)%>%filter(((sum(is.na(outlier)))>2))
 
-
-
-## --------------------------------------------------------------------------------------------------------
-cell_for_plotting=c("CTR_M2_O5","TZM","Vuud_2")
-
-df=(bind_rows(all_outliers))[(bind_rows(all_outliers)$cell_line)%in%unique(HIV1_virus_data_outliers$cell_line[!HIV1_virus_data_outliers$cell_line%in%cell_for_plotting]),]%>%group_by(cell_line,screen_nb,replicate)%>%mutate(max_assay=max(zscore))
-
-df2=HIV1_virus_data_outliers[!HIV1_virus_data_outliers$cell_line%in%cell_for_plotting,]%>%group_by(cell_line,screen_nb,replicate)%>%mutate(max_assay=max(zscore))
-
-
-ggplot()+
-  geom_line(data=df,aes(y=(max_assay),x = interaction(replicate,screen),group = 1))+
-  geom_point(data=df2,aes(y=(max_assay),x = interaction(replicate,screen)),colour="red")+
-    geom_point(data=df,aes(y=(zscore),x = interaction(replicate,screen)),colour="black",shape=2,size=0.2)+
-
-  facet_wrap(~cell_line, scales = "free_y") +
-  #geom_boxplot(data=df,aes(y=(zscore),x = interaction(replicate,screen),),show.legend = T)+
-  
-  theme_classic()+
-  #ggtitle()+
-  xlab("Replicate.Screen")+
-  ylab("Ζscore")+
-  theme(text = element_text(size = 10))
 
 
 
@@ -259,7 +217,7 @@ i <- i %>%
 ## ----logarithmic-----------------------------------------------------------------------------------------
 logarithmic_plot_virus=purrr::map(virus_data_per_cell_line$data,apply_plot_log)
 names(logarithmic_plot_virus)=virus_data_per_cell_line$cell_line
-logarithmic_plot_virus
+#logarithmic_plot_virus
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -358,32 +316,8 @@ apply_plot_logistic <- function(i) {
 ## ----logistic--------------------------------------------------------------------------------------------
 logistic_plot_virus=purrr::map(virus_data_per_cell_line$data,apply_plot_logistic)
 names(logistic_plot_virus)=virus_data_per_cell_line$cell_line
-logistic_plot_virus
+#logistic_plot_virus
 
-
-## --------------------------------------------------------------------------------------------------------
-SD_table=data.frame()
-
-for (i in virus_data_per_cell_line[2][[1]]){
-  SD_table=rbind(SD_table,distinct(i%>%group_by(screen_nb,replicate)%>% 
-                                     mutate(max_zscore=max(zscore))%>%
-                                     ungroup()%>%
-                                     reframe(
-                                       cell_line=cell_line,
-                                       mean_max_zscore=mean(max_zscore),
-                                       SD_max_zscore=sd(max_zscore),
-                                       CV_z=(SD_max_zscore/mean_max_zscore)*100,
-                                       mean_AUC=mean(abs(area_under_curve)),
-                                       SD_AUC=sd((abs(area_under_curve))),
-                                       CV_AUC  = (SD_AUC/mean_AUC)*100)
-                                   )
-                 )
-}
-
-
-## --------------------------------------------------------------------------------------------------------
-mean(SD_table$SD_max_zscore[c(1:10,12:113,115:152)])
-mean(na.omit(SD_table$SD_AUC))#[c(1:10,12:113,115:152)])
 
 
 ## --------------------------------------------------------------------------------------------------------
@@ -459,48 +393,9 @@ dim(HIV1_virus_data_PCA_1)
 
 
 ## ----wssplot---------------------------------------------------------------------------------------------
-wssplot <- function(data, nc=15, seed=1234){
-                  wss <- (nrow(data)-1)*sum(apply(data,2,var))
-                      for (i in 2:nc){
-                set.seed(seed)
-                    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
-              plot(1:nc, wss, type="b", xlab="Number of Clusters",
-                            ylab="Within groups sum of squares")
-              wss
-}
-wssplot(HIV1_virus_data_PCA_1)
-
 
 ## --------------------------------------------------------------------------------------------------------
 PCA=prcomp(x = HIV1_virus_data_PCA_1)
-
-
-## ----scree_plot------------------------------------------------------------------------------------------
-library(factoextra)
-fviz_eig(PCA)
-
-
-## ----PCA_spread------------------------------------------------------------------------------------------
-PCA_spread=fviz_pca_ind(PCA,col.ind = "cos2",repel = F)
-PCA_spread
-
-
-## ----PCA contributions-----------------------------------------------------------------------------------
-contributions_PCA=fviz_pca_var(PCA,
-             col.var = "contrib", # Color by contributions to the PC
-             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-             repel = TRUE ) 
-#bmp("contributions_PCA_virus.bmp",width = 3200,height = 2400,res = 500)
-contributions_PCA
-#dev.off()
-
-
-## ----biPlot----------------------------------------------------------------------------------------------
-PCA_biplot=fviz_pca_biplot(PCA, repel=F,
-                col.var = "#2E9FDF", # Variables color
-                col.ind = "#696969"  # Individuals color
-                )
-PCA_biplot
 
 
 ## ----PCA dim 1-------------------------------------------------------------------------------------------
@@ -510,186 +405,4 @@ dim(res.ind$coord)
 ind_coord_virus <- as.data.frame(res.ind$coord)
 ind_coord_virus=ind_coord_virus[-which(row.names(ind_coord_virus)==('TZM')|row.names(ind_coord_virus)=='CTR_M2_O5'|row.names(ind_coord_virus)=='CTR_M2_O5_21'),]
 res.ind$cos2=res.ind$cos2[-which(row.names(res.ind$cos2)==('TZM')|row.names(res.ind$cos2)=='CTR_M2_O5'|row.names(res.ind$cos2)=='CTR_M2_O5_21'),]
-
-
-PCA_dim1=ggplot(data = ind_coord_virus,aes(x=Dim.1,y = 0,label=row.names(ind_coord_virus)))+
-  geom_point(size = 3,aes(colour = res.ind$cos2[,1]), position = position_jitter(height = 0.02,width = 0),)+
-  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord_virus),'')),max.overlaps = 150)+
-  geom_hline(yintercept = 0, linetype = "dashed", color = "gray")+
-  theme_minimal() +
-  xlab("PC1")+
-  coord_cartesian(ylim = c(-0.05, 0.05))+
-  theme(axis.ticks.y = element_blank(),
-        axis.text.y  = element_blank(),
-        panel.grid.major.y = element_blank())
-         
-PCA_dim1
-
-
-## ----PCA classification----------------------------------------------------------------------------------
-susceptible_virus_cell=ind_coord_virus[(ind_coord_virus$Dim.1 < quantile(ind_coord_virus$Dim.1, 0.1)),]
-Resistant_virus_cell=ind_coord_virus[(ind_coord_virus$Dim.1 > quantile(ind_coord_virus$Dim.1, 0.9)),]
-
-HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
-HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(Resistant_virus_cell),(HIV1_virus_data_PCA_sum$cell_line)),]
-
-
-set.seed(39)
-clusters <- kmeans(ind_coord_virus[, c("Dim.1", "Dim.2")], centers = 10)
-
-
-ind_coord_virus$group <- as.factor(clusters$cluster)
-ind_coord_virus$pc_combined=0.80*ind_coord_virus$Dim.1 + 0.20*ind_coord_virus$Dim.2
-
-PCA_classification=ggplot(data = ind_coord_virus,aes(x=Dim.1,y = Dim.2,label=row.names(ind_coord_virus)))+
-  geom_point(size = 3,aes(colour = group))+
-  geom_label_repel(aes(label=ifelse(Dim.1 < quantile(Dim.1, 0.1) | Dim.1 > quantile(Dim.1, 0.9),row.names(ind_coord_virus),'')),max.overlaps = 150)+
-  xlab("PC1")+
-  ylab("PC2")+
-  theme_classic()
-
-
-susceptible_virus_cell=ind_coord_virus[(ind_coord_virus$pc_combined < quantile(ind_coord_virus$pc_combined, 0.1)),]
-Resistant_virus_cell=ind_coord_virus[(ind_coord_virus$pc_combined > quantile(ind_coord_virus$pc_combined, 0.9)),]
-
-
-
-#bmp("PCA_classification.bmp",width = 3200,height = 2400,res = 500)
-PCA_classification
-#dev.off()
-
-HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_virus_data_susceptible)) %>%
-  mutate(phenotype = ifelse(row.names(.) %in% row.names(HIV_virus_data_resistant),
-                            "resistant",
-                            "susceptible"))
-
-
-## --------------------------------------------------------------------------------------------------------
-susceptible_virus_clusters=ind_coord_virus[(ind_coord_virus$group==9)|(ind_coord_virus$group==5),]
-resistant_virus_clusters=ind_coord_virus[(ind_coord_virus$group==8),]#|(ind_coord_virus$group==6),]
-
-HIV_virus_data_susceptible=HIV1_virus_data_PCA_1[match(row.names(susceptible_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
-HIV_virus_data_resistant=HIV1_virus_data_PCA_1[match(row.names(resistant_virus_clusters),(HIV1_virus_data_PCA_sum$cell_line)),]
-
-HIV1_virus_data_notable <- as.data.frame(rbind(HIV_virus_data_resistant, HIV_virus_data_susceptible)) %>%
-  mutate(phenotype = ifelse(row.names(.) %in% row.names(HIV_virus_data_resistant),
-                            "resistant",
-                            "susceptible"))
-
-
-## ----Z score split---------------------------------------------------------------------------------------
-Z_score_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=assay_output,colour = phenotype))+
-  geom_point()+
-   theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-Z_score_split
-
-
-## ----a_log split-----------------------------------------------------------------------------------------
-a_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=a_log,colour = phenotype))+
-  geom_point()+
-   theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-a_log_split
-
-
-## ----b_log split-----------------------------------------------------------------------------------------
-b_log_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=b_log,colour = phenotype))+
-  geom_point()+
-   theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-b_log_split
-
-
-## ----AUC_split-------------------------------------------------------------------------------------------
-AUC_split=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=area_under_curve,colour = phenotype))+
-  geom_point()+
-   theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-AUC_split
-
-
-## ----b_logis---------------------------------------------------------------------------------------------
-#b_logis=ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=logis_b,colour = phenotype))+
-  #geom_point()
-
-
-## --------------------------------------------------------------------------------------------------------
-#ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=logis_d,colour = phenotype))+
-  #geom_point()
-
-
-## --------------------------------------------------------------------------------------------------------
-#ggplot(HIV1_virus_data_notable,aes(x=row.names(HIV1_virus_data_notable),y=logis_e,colour = phenotype))+
-  #geom_point()
-
-
-## --------------------------------------------------------------------------------------------------------
-virus_ranking=list()
-for(col in names(HIV1_virus_data_PCA_1)) {
-  
-  # Extract the column values
-  vec <- HIV1_virus_data_PCA_1[[col]]
-  
-  # Calculate the 10th and 90th quantiles (ignoring NAs)
-  low_quant  <- quantile(vec, 0.1, na.rm = TRUE)
-  high_quant <- quantile(vec, 0.9, na.rm = TRUE)
-  
-  # Identify rows where the value is either below the 10th percentile or above the 90th percentile
-  extreme_idx <- which(vec < low_quant | vec > high_quant)
-  
-  # Subset the original data frame for these extreme values
-  subset_data <- HIV1_virus_data_PCA_1[extreme_idx, ]
-  
-  # Add a phenotype column: if the value is below the 10th percentile, call it "resistant",
-  # if above the 90th percentile, label it "susceptible"
-  # (This uses the current column's values from the subset.)
-  subset_data$phenotype <- ifelse(vec[extreme_idx] < low_quant, "resistant", "susceptible")
-  subset_data$cell_line=rownames(subset_data)
-  rownames(subset_data) <- NULL
-  
-  # Store the subset in the virus_ranking list using the column name as the key
-  virus_ranking[[col]] <- subset_data
-}
-
-
-
-
-
-## --------------------------------------------------------------------------------------------------------
-virus_ranking_df=bind_rows(virus_ranking)
-cell_line_counts <- virus_ranking_df %>% 
-  count(cell_line,phenotype)
-
-# 3. Get the cell lines that appear more than 9 times.
-common_virus_cell_lines <- cell_line_counts[cell_line_counts$n>3,]
-
-# 4. Filter the original data to include only those common_virus cell lines.
-most_common_virus <- inner_join(virus_ranking_df,common_virus_cell_lines,join_by(x$cell_line==y$cell_line,x$phenotype==y$phenotype))
-
-# Optionally, view the result:
-print(unique(most_common_virus))
-
-common_virus_list=unique(most_common_virus)
-
-
-## --------------------------------------------------------------------------------------------------------
-export_list_for_plink=ind_coord_virus[,c(1,2)]
-export_list_for_plink$cell_line=row.names(export_list_for_plink)
-export_list_for_plink=export_list_for_plink[,c(3,1)]
-#write_delim(x = export_list_for_plink,file = "plink_virus_phenotype.txt",delim = "\t")
-
-
-
-## --------------------------------------------------------------------------------------------------------
-phenotype_virus_susceptible=data.frame("IID"=toupper(row.names(susceptible_virus_clusters)),"Phenotype"=2)
-phenotype_virus_resistant=data.frame("IID"=toupper(row.names(resistant_virus_clusters)),"Phenotype"=1)
-
-phenotype_virus=rbind(phenotype_virus_susceptible,phenotype_virus_resistant)
-
-#write_delim(x = phenotype_virus,file = "../../inputs/virus_phenotype.txt",delim = "\t")
 
