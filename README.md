@@ -97,7 +97,7 @@ exports TPM counts which is used as input in Plink_for_eQTL.sh
 
 # SHINY APP
 
-I made a shiny app to visualise the cleaning and classification sections of my work, just place the original data files in the same folder as the app (shiny-gene-list)
+I made a shiny app to visualise the cleaning and classification sections of my work, just place the original data files in the same folder as the app (shiny-gene-list), Open the app using Rstudio and make sure you have Rshiny packages installed, if confused please consult comments in the app
 
 
 
