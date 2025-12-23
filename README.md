@@ -95,5 +95,9 @@ requires RNA counts (see transcriptomic), Annovar and genotype (see Plink)
 exports TPM counts which is used as input in Plink_for_eQTL.sh
 
 
+# SHINY APP
+
+I made a shiny app to visualise the cleaning and classification sections of my work, just place the original data files in the same folder as the app (shiny-gene-list)
+
 
 
