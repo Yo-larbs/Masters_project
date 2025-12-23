@@ -20,9 +20,9 @@ library(plotly)
 
 
 #knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_vector.Rmd","cleaning_and_classification_vector.R")
-#source("./cleaning_and_classification_vector.R")
+source("./cleaning_and_classification_vector.R")
 #knitr::purl("../scripts/cell_line_classification/cleaning_and_classification_virus.Rmd","cleaning_and_classification_virus.R")
-#source("./cleaning_and_classification_virus.R")
+source("./cleaning_and_classification_virus.R")
 
 
 #this is the main menu UI, which would act as a default
