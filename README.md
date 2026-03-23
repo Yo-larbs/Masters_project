@@ -19,9 +19,9 @@ hiv1_vectors_collated_n0_uncleaned(Sheet1).csv
 hiv1_virus_colllated_n0_uncleaned(Sheet1).csv
 
 ### outputs
-vector/virus_phenotype (categorical_only extremes)
+vector/virus_phenotype.txt (categorical_only extremes)
 
-vector/virus_plink_phenotype (Quantitative using PC1)
+vector/virus_plink_phenotype.txt (Quantitative using PC1)
 
 ### **NOTE** 
 BILX_1 cell line has an typo (called BLIX_1) within the input file, i recommend manually changing within the phenotype file if you want to reporoduce
@@ -34,12 +34,17 @@ HIV_vector.qmd
 HIV_virus.qmd
 
 ### instructions
-Need to have the vcf for extremes listed from cell line classification
+Need to have the vcfs for extreme phenotypes listed from cell line classification
+
 annovar avinput file made from file is then used in annovar
+
 **need to have annovar** (annovar code listed within the virus file)
 
 ### inputs: 
 extreme VCFs (susceptible and resistant)
+
+### outputs
+avinput file (only comparing extremes)
 
 ## Plink2
 combining all gVCF was done on Kings create HPC https://docs.er.kcl.ac.uk/CREATE/access/ .would need singularity pull files on to HPC, also uses specific file Paths and os would need some editing if trying to replicate
@@ -57,7 +62,7 @@ should give .assoc file
 Total_plink_vector_analysis.qmd
 Total_plink_virus_analysis.qmd
 
-would also need  annovar output for all cell lines as well as genotype file (code used to produce included in Total_plink_virus_analysis)
+would also need  **annovar output** for all cell lines as well as **genotype file** (code used to produce included in Total_plink_virus_analysis)
 
 ## REGENIE
 
